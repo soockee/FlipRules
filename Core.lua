@@ -880,7 +880,9 @@ shopStation:SetScript("OnLeave", GameTooltip_Hide)
 
 -- The server takes one post per click and needs a moment between posts, so "bulk" is a button you
 -- click repeatedly: each click posts the most valuable result of the selected rule still in your bags.
-local POST_DURATION = 3 -- the longest the AH offers (24 h or 48 h depending on the client)
+local POST_DURATION = 3 -- writs: the longest the AH offers (24 h or 48 h depending on the client)
+local POST_DURATION_LW = 1 -- leatherworking: the shortest (2 h); heavy undercutting, so a short post risks less deposit
+local DURATION_NAME = { "short", "medium", "long" }
 local POST_WAIT = 5     -- seconds to wait for the AH to confirm a post
 local POST_FRESH = 60   -- re-check an item's price before posting when the last check is older
 local SEARCH_WAIT = 5   -- seconds before giving up on a search answer
@@ -1121,16 +1123,17 @@ end
 
 local function PostDone()
   if not posting then return end
-  Say(("posted %d x %s at %s each"):format(posting.qty, Link(posting.id), Money(posting.price)))
+  Say(("posted %d x %s at %s each (%s duration)"):format(posting.qty, Link(posting.id), Money(posting.price),
+    DURATION_NAME[posting.duration]))
   posting = nil
 end
 
 local function CallPost(p, confirm)
   local AH = C_AuctionHouse
   if p.commodity then
-    return pcall(confirm and AH.ConfirmPostCommodity or AH.PostCommodity, p.loc, POST_DURATION, p.qty, p.price)
+    return pcall(confirm and AH.ConfirmPostCommodity or AH.PostCommodity, p.loc, p.duration, p.qty, p.price)
   end
-  return pcall(confirm and AH.ConfirmPostItem or AH.PostItem, p.loc, POST_DURATION, p.qty, nil, p.price)
+  return pcall(confirm and AH.ConfirmPostItem or AH.PostItem, p.loc, p.duration, p.qty, nil, p.price)
 end
 
 local function Post(item)
@@ -1145,7 +1148,8 @@ local function Post(item)
   end
   local bag, slot, stack = FindSlot(item.id)
   if not bag then return end
-  local p = { id = item.id, price = item.price, loc = ItemLocation:CreateFromBagAndSlot(bag, slot) }
+  local p = { id = item.id, price = item.price, loc = ItemLocation:CreateFromBagAndSlot(bag, slot),
+    duration = selected and selected.group == "Leatherworking" and POST_DURATION_LW or POST_DURATION }
   if AH.GetItemCommodityStatus and AH.PostCommodity then
     local ok, s = pcall(AH.GetItemCommodityStatus, p.loc)
     p.commodity = ok and s == (Enum and Enum.ItemCommodityStatus and Enum.ItemCommodityStatus.Commodity or 2)
@@ -1188,6 +1192,9 @@ postBtn:SetScript("OnEnter", function(self)
   GameTooltip:AddLine("One click posts one auction. Click again for the next.", 1, 1, 1, true)
   GameTooltip:AddLine("Price: cheapest listing minus 1 copper, checked live right before each post (your own auctions left out).", 0.7, 0.7, 0.7, true)
   GameTooltip:AddLine("The list below shows what goes up next, at which price.", 0.7, 0.7, 0.7, true)
+  GameTooltip:AddLine(selected and selected.group == "Leatherworking"
+    and "Duration: short (2 h). Leatherworking is undercut fast, so a short post loses less deposit."
+    or "Duration: long (writs).", 0.7, 0.7, 0.7, true)
   GameTooltip:Show()
 end)
 postBtn:SetScript("OnLeave", GameTooltip_Hide)
