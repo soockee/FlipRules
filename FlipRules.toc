@@ -1,0 +1,10 @@
+## Interface: 16001, 11509
+## Title: FlipRules
+## Notes: Ranks buy -> transform -> sell flips (open containers, craft) by auction house profit. Rules live in Rules.lua.
+## Version: 0.1.0
+## SavedVariables: FlipRulesDB
+## OptionalDeps: AHledger, Auctionator
+
+Core.lua
+Rules.lua
+Leatherworking.lua
