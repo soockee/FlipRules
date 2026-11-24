@@ -1303,6 +1303,7 @@ mailBtn:Hide()
 local delBtn, CheapSlots
 do
 local CHEAP = 100 -- copper: opened writs whose live price is below this are deleted
+local CHEAP_AGE = 24 * 3600 -- your own live check counts this long; AHledger's table is never used here
 
 -- Which bag stacks to delete: only items with a live price under `limit`; an item never checked
 -- (or with no listings) is never deleted. Pure: items = { {id, ...}, ... }, price(id) -> copper|nil.
@@ -1326,7 +1327,14 @@ CheapSlots = function()
       end
     end
   end
-  return ns.CheapStacks(items, function(id) local l = Live(id) return l and l.min end, CHEAP)
+  local list = ns.CheapStacks(items, function(id) local l = Live(id, CHEAP_AGE) return l and l.min end, CHEAP)
+  for _, it in ipairs(list) do it.t = Live(it.id, CHEAP_AGE).t end
+  return list
+end
+
+local function Ago(t)
+  local m = math.floor((time() - t) / 60)
+  return m < 60 and ("%dm ago"):format(m) or ("%dh ago"):format(math.floor(m / 60))
 end
 
 delBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -1339,7 +1347,7 @@ delBtn:SetScript("OnClick", function() -- one stack per click, the one named in 
   Pickup(it.bag, it.slot)
   if CursorHasItem() then
     DeleteCursorItem()
-    Say(("deleted %s x%d (listed at %s)"):format(it.link or it.id, it.n, Money(it.price)))
+    Say(("deleted %s x%d (cheapest listing %s, checked %s)"):format(it.link or it.id, it.n, Money(it.price), Ago(it.t)))
   end
   ClearCursor()
 end)
@@ -1348,11 +1356,12 @@ delBtn:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_TOP")
   GameTooltip:AddLine("Delete writs worth less than " .. Money(CHEAP))
   GameTooltip:AddLine("One click deletes one stack, the first below. This can't be undone.", 1, 0.3, 0.3, true)
-  GameTooltip:AddLine("Only writs checked live in the last hour count; unchecked ones are kept. "
-    .. "Run Check prices at the auction house first.", 0.7, 0.7, 0.7, true)
+  GameTooltip:AddLine("Price = the cheapest listing from your own Check prices in the last 24 hours "
+    .. "(not AHledger). Writs you haven't checked are kept.", 0.7, 0.7, 0.7, true)
   for i, it in ipairs(list) do
     if i > 15 then GameTooltip:AddLine(("... and %d more"):format(#list - 15)) break end
-    GameTooltip:AddDoubleLine(("%s x%d"):format(it.link or it.id, it.n), Money(it.price), 1, 1, 1, 1, 1, 1)
+    GameTooltip:AddDoubleLine(("%s x%d"):format(it.link or it.id, it.n),
+      ("%s  (%s)"):format(Money(it.price), Ago(it.t)), 1, 1, 1, 1, 1, 1)
   end
   GameTooltip:Show()
 end)
@@ -1948,7 +1957,7 @@ local function RefreshStats()
     or ("No %s to mail"):format(MailWhat()))
   local cheap = (not selling and not mailOpen) and #CheapSlots() or 0
   delBtn:SetShown(cheap > 0)
-  delBtn:SetText(("Delete cheap writs (%d)"):format(cheap))
+  delBtn:SetText(("Delete writs <1s (%d)"):format(cheap))
   sellArea:SetShown(selling)
   scroll:SetShown(not selling)
   if selling then RefreshSell() end
