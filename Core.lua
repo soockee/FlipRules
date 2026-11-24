@@ -4,6 +4,8 @@ local ADDON, ns = ...
 local GetItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
 local NumSlots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
 local SlotInfo = (C_Container and C_Container.GetContainerItemInfo) or GetContainerItemInfo
+-- backpack + 4 bags, plus the reagent bag (5) where the client has one
+local LAST_BAG = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4
 
 local AH_CUT = 0.05
 local MIN_OBSERVED = 30 -- opens before your own drop counts replace uniform odds
@@ -368,7 +370,7 @@ local function Cat(rule, id) return rule.category and rule.category[id] or "Othe
 
 local function BagCounts()
   local c = {}
-  for bag = 0, 4 do
+  for bag = 0, LAST_BAG do
     for slot = 1, (NumSlots(bag) or 0) do
       local info = SlotInfo(bag, slot)
       if type(info) == "table" and info.itemID then c[info.itemID] = (c[info.itemID] or 0) + (info.stackCount or 1) end
@@ -1101,7 +1103,7 @@ local function NextPost()
 end
 
 local function FindSlot(id)
-  for bag = 0, 4 do
+  for bag = 0, LAST_BAG do
     for slot = 1, (NumSlots(bag) or 0) do
       local info = SlotInfo(bag, slot)
       if type(info) == "table" and info.itemID == id and not info.isLocked then return bag, slot, info.stackCount or 1 end
@@ -1245,7 +1247,7 @@ end
 
 local function MailSlots()
   local ids, slots = MailIDs(), {}
-  for bag = 0, 4 do
+  for bag = 0, LAST_BAG do
     for slot = 1, (NumSlots(bag) or 0) do
       local info = SlotInfo(bag, slot)
       if type(info) == "table" and ids[info.itemID] and not info.isLocked and not info.isBound then
@@ -1345,7 +1347,7 @@ end
 CheapSlots = function()
   local ids, items = {}, {}
   for _, r in ipairs(ns.rules) do for _, id in ipairs(r.pool or {}) do ids[id] = true end end
-  for bag = 0, 4 do
+  for bag = 0, LAST_BAG do
     for slot = 1, (NumSlots(bag) or 0) do
       local info = SlotInfo(bag, slot)
       if type(info) == "table" and ids[info.itemID] and not info.isLocked then
