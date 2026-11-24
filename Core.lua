@@ -1218,21 +1218,28 @@ end
 local MAIL_CHARS = "Milchiger Abgang, Wealth Peon"
 local function MailTo() return ns.MailTarget(FlipRulesDB.mailChars or MAIL_CHARS, UnitName("player")) end
 
--- What the mail button sends: Leatherworking tab = the reagents of its rules (down the chains,
--- stations too); anywhere else = every item a rule can drop (the opened writs).
-local function MailWhat() return FlipRulesDB.filter == "Leatherworking" and "reagents" or "writs" end
+-- What the mail button sends: Leatherworking tab (or a leatherworking rule selected) = every
+-- leatherworking item, reagents and crafted products; anywhere else = the opened writs.
+local function MailWhat()
+  return (FlipRulesDB.filter == "Leatherworking" or selected and selected.group == "Leatherworking")
+    and "LW items" or "writs"
+end
 local function MailIDs()
   local ids = {}
   if MailWhat() == "writs" then
     for _, r in ipairs(ns.rules) do for _, id in ipairs(r.pool or {}) do ids[id] = true end end
     return ids
   end
+  -- everything leatherworking: each rule's reagents, products and station, every intermediate recipe
+  -- (Heavy Leather, Cured Heavy Hide, ...) with its own reagents, and the stations
   for _, r in ipairs(ns.rules) do
-    if r.group == "Leatherworking" then
-      local out = r.outputs or {}
-      for _, id in ipairs(RuleItems(r)) do if not out[id] then ids[id] = true end end
-    end
+    if r.group == "Leatherworking" then for _, id in ipairs(RuleItems(r)) do ids[id] = true end end
   end
+  for id, rec in pairs(ns.recipes) do
+    ids[id] = true
+    for rid in pairs(rec.reagents or {}) do ids[rid] = true end
+  end
+  for id in pairs(ns.stations) do ids[id] = true end
   return ids
 end
 
@@ -1269,7 +1276,7 @@ local function SendBatch()
   end
   ClearCursor()
   mailing = { to = to, n = n, kind = kind }
-  SendMail(to, ("%s (%d)"):format(kind == "writs" and "Writs" or "LW reagents", n), "")
+  SendMail(to, ("%s (%d)"):format(kind == "writs" and "Writs" or "LW items", n), "")
 end
 
 -- Mail you send by hand: the recipient is your other character, the subject the first item's
@@ -1296,9 +1303,21 @@ mailBtn:SetScript("OnEnter", function(self)
   GameTooltip:AddLine(("One click sends one mail of up to %d stacks. %d stacks in your bags: %d mails."):format(
     MAIL_MAX, stacks, math.ceil(stacks / MAIL_MAX)), 1, 1, 1, true)
   GameTooltip:AddLine(MailWhat() == "writs"
-    and "Every Craftsman's Writ the rules know is sent; sealed writs stay. On the Leatherworking tab this sends reagents instead."
-    or "Every reagent of the Leatherworking rules is sent: leather, hides, thread, salt, dyes, the stations. Crafted items stay.",
+    and "Every Craftsman's Writ the rules know is sent; sealed writs stay. On the Leatherworking tab this sends leatherworking items instead."
+    or "Every leatherworking item is sent: leather, hides, thread, salt, dyes, the stations, and the items the rules craft.",
     0.7, 0.7, 0.7, true)
+  local counts, order = {}, {}
+  for _, s in ipairs(MailSlots()) do
+    local info = SlotInfo(s.bag, s.slot)
+    if type(info) == "table" then
+      if not counts[info.itemID] then order[#order + 1] = info.itemID end
+      counts[info.itemID] = (counts[info.itemID] or 0) + (info.stackCount or 1)
+    end
+  end
+  for i, id in ipairs(order) do
+    if i > 15 then GameTooltip:AddLine(("... and %d more"):format(#order - 15)) break end
+    GameTooltip:AddDoubleLine(Name(id), "x" .. counts[id], 1, 1, 1, 1, 1, 1)
+  end
   GameTooltip:AddLine("Postage applies per mail. Your characters are set in the 'Mail between' box at the bottom.", 0.7, 0.7, 0.7, true)
   GameTooltip:Show()
 end)
