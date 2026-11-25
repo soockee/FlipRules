@@ -1322,6 +1322,7 @@ function ns.MailTarget(chars, me)
   return ""
 end
 local MAIL_CHARS = "Milchiger Abgang, Wealth Peon"
+ns.MAIL_CHARS = MAIL_CHARS
 local function MailTo() return ns.MailTarget(FlipRulesDB.mailChars or MAIL_CHARS, UnitName("player")) end
 
 -- What the mail button sends: Leatherworking tab (or a leatherworking rule selected) = every
@@ -2509,7 +2510,7 @@ for i, t in ipairs({ "Item", "Sold/day", "Listed", "Cover", "Price", "Gold/day" 
 end
 
 local sortBtns = {}
-local function MoverItems()
+local function MoverItems(key)
   local ids, seen = {}, {}
   local function add(id) if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end end
   for _, r in ipairs(ns.rules) do add(r.use); for _, id in ipairs(RuleItems(r)) do add(id) end end
@@ -2522,8 +2523,9 @@ local function MoverItems()
       rows[#rows + 1] = { id = id, perDay = pd, listed = (Listed(id)), price = a and (a.median or a.minBuyout) or 0 }
     end
   end
-  return ns.Movers(rows, moverKey)
+  return ns.Movers(rows, key or moverKey)
 end
+ns.MoverRows = MoverItems
 
 local function Count(n) return n >= 10000 and ("%.0fk"):format(n / 1000) or n >= 100 and ("%.0f"):format(n) or ("%.1f"):format(n) end
 local function Cover(h) return h == math.huge and "-" or h >= 48 and ("%.0fd"):format(h / 24) or ("%.0fh"):format(h) end
@@ -2568,6 +2570,25 @@ local modeBtn = CreateFrame("Button", nil, stock, "UIPanelButtonTemplate")
 modeBtn:SetSize(80, 18)
 modeBtn:SetPoint("TOPRIGHT", -30, -4)
 modeBtn:SetScript("OnClick", function() moverMode = not moverMode; sOffset = 0; RefreshStock() end)
+
+-- Stock & demand of a writ flip's pool if you open `sealed` more (nil: every sealed one listed): ns.Supply's
+-- table plus listedSealed, sealedSrc ("live" / "scan" / nil) and unknown (writs with no listing data).
+function ns.SupplyFor(r, sealed)
+  local e = Evaluated(r)
+  local pool, w = e.evalRule.pool, e.weights
+  local total = 0
+  for _, id in ipairs(pool) do total = total + (w and (w[id] or 0) or 1) end
+  local rows, unknown = {}, 0
+  for _, id in ipairs(pool) do
+    local n, src = Listed(id)
+    if not src then unknown = unknown + 1 end
+    rows[#rows + 1] = { id = id, odds = (w and (w[id] or 0) or 1) / total, stock = n, perDay = PerDay(id) }
+  end
+  local listedSealed, sealedSrc = Listed(r.use)
+  local t = ns.Supply(rows, sealed or listedSealed)
+  t.listedSealed, t.sealedSrc, t.unknown, t.okDays = listedSealed, sealedSrc, unknown, STOCK_OK
+  return t
+end
 
 RefreshStock = function()
   if not stock:IsShown() then return end
@@ -2751,6 +2772,38 @@ for i = 1, HROWS do
 end
 
 
+-- A flip's history as data: one point per hour any of its items was seen (cost to make, value after
+-- the cut), first..today slots, and each input and output's price then and now.
+function ns.HistData(r)
+  local e = Evaluated(r)
+  local er, H = e.evalRule, FlipRulesDB.hist or {}
+  local now, seen, slots = ns.Slot(time()), {}, {}
+  for _, id in ipairs(RuleItems(r)) do
+    for k in pairs(H[id] or {}) do if not seen[k] then seen[k] = true; slots[#slots + 1] = k end end
+  end
+  if not seen[now] then slots[#slots + 1] = now end
+  table.sort(slots)
+  local pts, hi, nPriced = {}, 0, #(er.pool or {})
+  for _ in pairs(er.outputs or {}) do nPriced = nPriced + 1 end
+  for _, k in ipairs(slots) do
+    local cost, value, _, unpriced = ns.Evaluate(er, ns.PriceOn(H, k, VendorPrice, ns.recipes), e.weights)
+    local ok = nPriced > 0 and unpriced / nPriced <= 0.25
+    pts[#pts + 1] = { slot = k, cost = cost, value = ok and value or nil }
+    hi = math.max(hi, cost or 0, ok and value or 0)
+  end
+  local first = slots[1]
+  local rows = {}
+  local pf, pn = ns.PriceOn(H, first, VendorPrice, ns.recipes), ns.PriceOn(H, now, VendorPrice, ns.recipes)
+  for id in pairs(er.inputs or {}) do rows[#rows + 1] = { id = id, a = pf(id, true), b = pn(id, true), vendor = ns.vendor[id] ~= nil } end
+  for id in pairs(er.outputs or {}) do
+    rows[#rows + 1] = { id = id, a = pf(id, false), b = pn(id, false), sell = true }
+    rows[#rows + 1] = { label = "Sold per day (AHledger)", a = ns.HistField(H, id, first, "pd"), b = ns.HistField(H, id, now, "pd"), perDay = true }
+  end
+  rows[#rows + 1] = { label = "Total cost to make", a = pts[1].cost, b = pts[#pts].cost }
+  rows[#rows + 1] = { label = "Sells for (after cut)", a = pts[1].value, b = pts[#pts].value }
+  return { pts = pts, first = first, today = now, hi = hi, rows = rows }
+end
+
 ns.RefreshHist = function()
   if not hist:IsShown() then return end
   for _, l in pairs(lines) do l:Hide() end
@@ -2860,6 +2913,7 @@ local BASIS_HELP = {
   ["7d"] = { "7 days", "Median of the last 7 days. Smooths out today's outliers." },
   safe = { "Safe", "The lower of today's and the 7-day median (cautious). The verdict always uses this." },
 }
+ns.BASIS_HELP, ns.Basis = BASIS_HELP, Basis
 
 local sellLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 sellLabel:SetPoint("BOTTOMLEFT", LX, 16)

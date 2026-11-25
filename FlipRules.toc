@@ -15,3 +15,6 @@ UI\Window.lua
 UI\Details.lua
 UI\Writs.lua
 UI\Leatherworking.lua
+UI\Market.lua
+UI\History.lua
+UI\Settings.lua

@@ -88,7 +88,7 @@ local function Build(p)
       row.cells.perDay:SetText(e.perDay and (e.perDay >= 10 and "%.0f" or "%.1f"):format(e.perDay) .. (e.paceOwn and "*" or "") or "-")
       row.cells.profitDay:SetText(ns.Money(e.profitDay))
     end,
-    onClick = function(e) UI.DB().lwSel = e.rule.name; UI.Refresh() end,
+    onClick = function(e) UI.DB().lwSel, UI.DB().lastSel = e.rule.name, e.rule.name; UI.Refresh() end,
     onEnter = function(row, e) ns.ShowBreakdown(row, e) end,
   })
   p.list:SetPoint("TOPLEFT", p.heads, "BOTTOMLEFT", 0, 0)

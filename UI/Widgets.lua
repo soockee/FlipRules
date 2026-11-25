@@ -91,6 +91,46 @@ function W.Segmented(parent, choices, get, onPick, width)
   return seg
 end
 
+-- A checkbox: a small box that fills gold when on, with its label. get() -> bool, set(bool).
+function W.Check(parent, text, get, set, tip)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetSize(16, 16)
+  T.Fill(b, "rowAlt")
+  b.edge = T.Border(b, "border")
+  b.mark = b:CreateTexture(nil, "ARTWORK")
+  b.mark:SetPoint("TOPLEFT", 3, -3); b.mark:SetPoint("BOTTOMRIGHT", -3, 3)
+  b.mark:SetColorTexture(T.Unpack("accent"))
+  b.label = T.Label(b, "small", "text")
+  b.label:SetPoint("LEFT", b, "RIGHT", 6, 0)
+  b.label:SetText(text)
+  function b:Refresh() self.mark:SetShown(get() and true or false) end
+  b:SetScript("OnClick", function(self) set(not get()); self:Refresh() end)
+  b:SetScript("OnEnter", function(self)
+    self.edge:SetColor("borderLit")
+    if tip then GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:AddLine(text); GameTooltip:AddLine(tip, 1, 1, 1, true); GameTooltip:Show() end
+  end)
+  b:SetScript("OnLeave", function(self) self.edge:SetColor("border"); GameTooltip:Hide() end)
+  return b
+end
+
+-- A text box with the theme's frame. opts: width, numeric; onCommit(text) when Enter or focus leaves.
+function W.Input(parent, opts, onCommit)
+  local box = CreateFrame("EditBox", nil, parent)
+  box:SetSize(opts.width or 120, 20)
+  box:SetAutoFocus(false)
+  box:SetFont(T.FONT, T.sizes.small, "")
+  box:SetTextColor(T.Unpack("text"))
+  box:SetTextInsets(6, 6, 0, 0)
+  if opts.numeric then box:SetNumeric(true) end
+  T.Fill(box, "rowAlt")
+  local edge = T.Border(box, "border")
+  box:SetScript("OnEditFocusGained", function() edge:SetColor("accent") end)
+  box:SetScript("OnEditFocusLost", function(self) edge:SetColor("border"); onCommit(self:GetText()) end)
+  box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+  box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+  return box
+end
+
 -- Column layout from widths: cols = { { key, label, width, justify, sort = true }, ... } -> each gets x.
 function W.Columns(cols, gap)
   local x = 0
