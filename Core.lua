@@ -514,6 +514,8 @@ end
 
 ---------------------------------------------------------------- profession scan
 
+local ScanTradeSkill -- the helpers stay inside the block: Lua allows 200 locals in the main chunk
+do
 local function ItemID(link) return link and tonumber(link:match("item:(%d+)")) end
 
 -- Modern recipe API (what AHledger tries first on this client).
@@ -580,7 +582,7 @@ end
 
 -- An open profession window: Leatherworking is saved (account-wide) as your crafter's learned
 -- recipes and becomes craft flips; any other profession is listed under All until you log out.
-local function ScanTradeSkill()
+ScanTradeSkill = function()
   local craft = ReadTradeSkill()
   if not IsLeatherworking() then ns.craft = craft return end
   if Linked() or #craft == 0 then return end
@@ -588,6 +590,7 @@ local function ScanTradeSkill()
   FlipRulesDB.lw = { char = UnitName("player"), t = time(), recipes = craft }
   ns.RebuildCrafts()
   if #craft ~= old then ns.Say(("%d learned leatherworking recipes saved."):format(#craft)) end
+end
 end
 
 ---------------------------------------------------------------- evaluation
@@ -2077,6 +2080,8 @@ end
 
 ---------------------------------------------------------------- right: verdict graph
 
+local RefreshView
+do
 -- A horizontal axis with coloured spans and labelled markers.
 local function Axis(y)
   local a = { spans = {}, marks = {} }
@@ -2159,7 +2164,7 @@ vDrivers:ClearAllPoints()
 vDrivers:SetPoint("TOPLEFT", RX, DRIVER_Y + 18)
 local vMore = Text(DRIVER_Y - 8 * 18, "GameFontDisableSmall", nil, VW)
 
-local function RefreshView()
+RefreshView = function()
   if not selected then return end
   local e = Evaluated(selected)
   local r = e.rule
@@ -2241,6 +2246,7 @@ local function RefreshView()
   local rest = 0
   for i = 9, #items do rest = rest + items[i].v end
   vMore:SetText(#items > 8 and ("... %d more outputs: %s (%.0f%%)"):format(#items - 8, Money(rest), sum > 0 and 100 * rest / sum or 0) or "")
+end
 end
 
 ---------------------------------------------------------------- stock & demand: would buying all sealed flood the market?
@@ -2939,6 +2945,7 @@ function ns.BuildCrafts(recipes, links, bop)
   return flips, inter
 end
 
+do
 local function IsBop(id)
   local bind = select(14, GetItemInfo(id))
   if bind == nil and C_Item and C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
@@ -2960,6 +2967,7 @@ function ns.RebuildCrafts()
     selected = nil
     for _, r in ipairs(flips) do if r.name == name then selected = r end end
   end
+end
 end
 
 ---------------------------------------------------------------- events
