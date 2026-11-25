@@ -2589,6 +2589,27 @@ checkBtn:SetScript("OnEnter", function(self)
 end)
 checkBtn:SetScript("OnLeave", GameTooltip_Hide)
 
+-- Leatherworking tab: every item of every leatherworking rule (reagents down the chains, stations, products)
+local checkAllBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+checkAllBtn:SetSize(90, 22)
+checkAllBtn:SetPoint("LEFT", checkBtn, "RIGHT", 4, 0)
+checkAllBtn:SetText("Check all LW")
+checkAllBtn:SetScript("OnClick", function()
+  local ids = {}
+  for _, r in ipairs(ns.rules) do
+    if r.group == "Leatherworking" then for _, id in ipairs(RuleItems(r)) do ids[#ids + 1] = id end end
+  end
+  Check(ids) -- drops duplicates
+end)
+checkAllBtn:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_TOP")
+  GameTooltip:AddLine("Check every leatherworking flip")
+  GameTooltip:AddLine("Searches every item of every leatherworking rule: products, reagents down the chains, "
+    .. "stations. Each item is searched once. Check prices does only the selected rule.", 1, 1, 1, true)
+  GameTooltip:Show()
+end)
+checkAllBtn:SetScript("OnLeave", GameTooltip_Hide)
+
 local mailLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 mailLabel:SetPoint("BOTTOMLEFT", RX + 250, 18)
 mailLabel:SetText("Mail between:")
@@ -2649,6 +2670,7 @@ RefreshAll = function()
   end
   ahCheck:SetChecked(FlipRulesDB.withAH and true or false)
   checkBtn:SetShown(ahOpen)
+  checkAllBtn:SetShown(ahOpen and FlipRulesDB.filter == "Leatherworking")
   if not mailBox:HasFocus() then mailBox:SetText(FlipRulesDB.mailChars or MAIL_CHARS) end
   local left = #searchQueue + (searching and 1 or 0)
   checkBtn:SetText(left > 0 and ("Checking (%d)"):format(left) or "Check prices")
