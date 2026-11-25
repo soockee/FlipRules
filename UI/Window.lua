@@ -12,6 +12,7 @@ local TABS = {
   { "history", "History" }, { "settings", "Settings" },
 }
 local WIDTH, HEIGHT = 1220, 600
+local MIN_W, MIN_H = 1000, 460
 
 function UI.AddTab(key, build, refresh) UI.builders[key], UI.refreshers[key] = build, refresh end
 
@@ -69,11 +70,25 @@ local function Build()
   win:EnableMouse(true)
   win:RegisterForDrag("LeftButton")
   win:SetScript("OnDragStart", win.StartMoving)
-  win:SetScript("OnDragStop", function(self)
+  local function Save(self)
     self:StopMovingOrSizing()
     local p, _, _, x, y = self:GetPoint()
-    DB().pos = { p, x, y }
-  end)
+    DB().pos, DB().size = { p, x, y }, { self:GetWidth(), self:GetHeight() }
+  end
+  win:SetScript("OnDragStop", Save)
+  -- the size grip in the bottom right corner: drag to resize; lists and the details pane follow
+  win:SetResizable(true)
+  if win.SetResizeBounds then win:SetResizeBounds(MIN_W, MIN_H) elseif win.SetMinResize then win:SetMinResize(MIN_W, MIN_H) end
+  local size = DB().size
+  if size then win:SetSize(math.max(MIN_W, size[1]), math.max(MIN_H, size[2])) end
+  local grip = CreateFrame("Button", nil, win)
+  grip:SetSize(16, 16)
+  grip:SetPoint("BOTTOMRIGHT", -2, 2)
+  grip:SetNormalTexture([[Interface\ChatFrame\UI-ChatIM-SizeGrabber-Up]])
+  grip:SetHighlightTexture([[Interface\ChatFrame\UI-ChatIM-SizeGrabber-Highlight]])
+  grip:SetPushedTexture([[Interface\ChatFrame\UI-ChatIM-SizeGrabber-Down]])
+  grip:SetScript("OnMouseDown", function() win:StartSizing("BOTTOMRIGHT") end)
+  grip:SetScript("OnMouseUp", function() Save(win) end)
   tinsert(UISpecialFrames, "FlipRulesMain") -- Escape closes it
 
   local title = CreateFrame("Frame", nil, win)

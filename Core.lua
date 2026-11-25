@@ -2037,6 +2037,98 @@ function ns.StatsText(r)
   return table.concat(L, "\n")
 end
 
+-- The details pane's content as data (UI/Details.lua lays it out): what you buy down the chains,
+-- what you sell, your record, and for a writ flip what opening gave you.
+do
+local function ChainRows(rows, id, qty, depth, dim)
+  local c, how, buy, craft = Cost(id)
+  rows[#rows + 1] = { id = id, depth = depth, qty = qty, how = how, each = c, total = c and c * qty, dim = dim,
+    alt = craft and how ~= "craft" and ("craft " .. Money(craft)) or how == "craft" and buy and ("AH " .. Money(buy)) or nil }
+  local rec = depth < 8 and ns.recipes[id]
+  if rec then
+    for rid, n in pairs(rec.reagents) do ChainRows(rows, rid, qty * n / rec.makes, depth + 1, dim or how ~= "craft") end
+  end
+end
+
+-- your posts of `id`, and its cheapest listing by day and AHledger's updates
+function ns.RecordData(id)
+  local t = FlipRulesDB.track and FlipRulesDB.track[id]
+  local d = { id = id, sum = ns.TrackSummary(t), track = t, days = {}, crowd = {} }
+  local h = FlipRulesDB.hist and FlipRulesDB.hist[id]
+  if not h then return d end
+  local slots, byDay = {}, {}
+  for k in pairs(h) do slots[#slots + 1] = k end
+  table.sort(slots)
+  for _, k in ipairs(slots) do
+    local x, dk = h[k], date("%m-%d", k * 3600)
+    local day = byDay[dk]
+    if not day then day = { day = dk }; byDay[dk] = day; d.days[#d.days + 1] = day end
+    local lo = x.lo or x.min
+    if lo and (not day.lo or lo < day.lo) then day.lo = lo end
+    day.n = x.n
+    if x.pd or x.md then d.crowd[#d.crowd + 1] = { day = date("%m-%d %H:%M", k * 3600), median = x.md, perDay = x.pd } end
+  end
+  while #d.days > 7 do table.remove(d.days, 1) end
+  while #d.crowd > 5 do table.remove(d.crowd, 1) end
+  return d
+end
+
+function ns.DetailData(r)
+  local e, price = Evaluated(r), PriceFor(r)
+  local d = { e = e, basis = Basis(), sell = {}, records = {} }
+  if r.writ then d.writ = { link = Link(r.writ), tier = r.tier } end
+  if r.inputs and not r.use then
+    d.chain = {}
+    for id, n in pairs(r.inputs) do ChainRows(d.chain, id, n, 1) end
+    if r.station then
+      d.station = { crafts = CraftsPerStation(), rows = {} }
+      ChainRows(d.station.rows, r.station, 1 / CraftsPerStation(), 1)
+    end
+  else
+    d.buy = {}
+    for id, n in pairs(r.inputs or {}) do d.buy[#d.buy + 1] = { id = id, qty = n, each = price(id, true) } end
+  end
+  for id, n in pairs(r.outputs or {}) do
+    local l = Live(id)
+    d.sell[#d.sell + 1] = { id = id, qty = n, price = price(id, false), perDay = (PerDay(id)), variants = l and l.variants,
+      checked = l ~= nil }
+    d.records[#d.records + 1] = ns.RecordData(id)
+  end
+  if r.use then
+    local s = Stats(r)
+    local n = s.opens
+    local en = FlipRulesDB.earn and FlipRulesDB.earn[r.name]
+    d.drops = { opens = n, need = MIN_OBSERVED, earn = en, cats = {}, items = {} }
+    local ids, inPool = {}, {}
+    for _, id in ipairs(r.pool or {}) do ids[#ids + 1] = id; inPool[id] = true end
+    for id in pairs(s.items) do if not inPool[id] then ids[#ids + 1] = id end end
+    local cats, catPool, value = {}, {}, 0
+    for _, id in ipairs(ids) do
+      local c = Cat(r, id)
+      cats[c] = (cats[c] or 0) + (s.items[id] or 0)
+      if inPool[id] then catPool[c] = (catPool[c] or 0) + 1 end
+      value = value + (s.items[id] or 0) * (price(id, false) or 0)
+      local k = s.items[id] or 0
+      local p = n > 0 and k / n or 0
+      d.drops.items[#d.drops.items + 1] = { id = id, cat = c, inPool = inPool[id], count = k, chance = p,
+        margin = Margin(p, n), price = price(id, false), perDay = (PerDay(id)) }
+    end
+    d.drops.avg = n > 0 and value / n or nil
+    for c, k in pairs(cats) do
+      local p = n > 0 and k / n or 0
+      d.drops.cats[#d.drops.cats + 1] = { cat = c, count = k, share = p, margin = Margin(p, n),
+        uniform = #(r.pool or {}) > 0 and (catPool[c] or 0) / #r.pool or 0 }
+    end
+    table.sort(d.drops.cats, function(a, b) return a.count > b.count or (a.count == b.count and a.cat < b.cat) end)
+    table.sort(d.drops.items, function(a, b)
+      if a.count ~= b.count then return a.count > b.count end
+      return (a.price or 0) > (b.price or 0)
+    end)
+  end
+  return d
+end
+end
+
 local function RefreshStats()
   resetBtn:SetShown(selected and selected.use and true or false)
   local station = selected and selected.station and true or false
