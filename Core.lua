@@ -434,6 +434,7 @@ end
 
 local function Name(id) return (GetItemInfo(id)) or ("item:" .. id) end
 local function Link(id) return select(2, GetItemInfo(id)) or Name(id) end
+ns.Money, ns.Name, ns.Link = Money, Name, Link
 
 local function InPool(rule, id)
   for _, p in ipairs(rule.pool or {}) do if p == id then return true end end
@@ -649,6 +650,8 @@ local function Evaluated(r)
     opens = s and s.opens or 0, observed = observed, safeValue = safeValue, evalRule = rule, weights = weights }
 end
 
+ns.Evaluated = Evaluated
+
 -- The checks behind the verdict, { pass, text } each; the first one is the hard requirement.
 function ns.Checks(e)
   local c = {
@@ -755,6 +758,7 @@ local function ShowBreakdown(row, e)
   if AHledgerAPI then GameTooltip:AddLine(AHledgerAPI.CREDIT, 0.5, 0.5, 0.5) end
   GameTooltip:Show()
 end
+ns.ShowBreakdown = ShowBreakdown
 
 local COLS = { { "Rule", 0, 240, "LEFT" }, { "Cost", 245, 80, "RIGHT" }, { "Value", 330, 80, "RIGHT" }, { "Profit", 415, 85, "RIGHT" } }
 local colHeads = {}
@@ -978,6 +982,7 @@ local POST_WAIT = 5     -- seconds to wait for the AH to confirm a post
 local POST_FRESH = 60   -- re-check an item's price before posting when the last check is older
 local SEARCH_WAIT = 5   -- seconds before giving up on a search answer
 local ahOpen, posting, postQueue = false, nil, {}
+function ns.AHOpen() return ahOpen end
 
 -- Live price checks, one search at a time, the next when the AH says it's ready again.
 -- An item with random suffixes ("of the Monkey") is listed once per variant, and an item search
@@ -2819,6 +2824,7 @@ ahLabel:SetText("Open and close with the auction house")
 ---------------------------------------------------------------- refresh everything
 
 RefreshAll = function()
+  if ns.RefreshUI then ns.RefreshUI() end -- the new window (UI/)
   if not frame:IsShown() then return end
   local list = Results()
   if not selected and list[1] then selected = list[1].rule end
@@ -3055,6 +3061,7 @@ end)
 SLASH_FLIPRULES1 = "/flip"
 SlashCmdList.FLIPRULES = function(msg)
   if (msg or ""):lower() == "test" then return SelfTest() end
+  if (msg or ""):lower() == "new" then return ns.ToggleUI() end
   openedByAH = false
   Toggle()
 end
