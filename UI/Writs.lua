@@ -58,7 +58,7 @@ local function Build(p)
   })
   p.list:SetPoint("TOPLEFT", p.heads, "BOTTOMLEFT", 0, 0)
   p.list:SetWidth(COLS.width + 8)
-  p.list:SetHeight(3 * T.ROW_H)
+  p.list:SetHeight(math.max(3, #WritRules()) * T.ROW_H)
   p.list:SetSelected(function(e) local s = Selected() return s and e.rule.name == s.name end)
 
   local hint = T.Label(p, "small", "dim")

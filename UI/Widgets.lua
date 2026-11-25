@@ -160,7 +160,8 @@ function W.RowList(parent, opts)
     list.rows[i] = r
     return r
   end
-  function list:Visible() return math.max(1, math.floor((self:GetHeight() or rh) / rh)) end
+  -- +0.5: a height of exactly 3 rows can come back as 59.99 after UI scaling, which floored to 2
+  function list:Visible() return math.max(1, math.floor(((self:GetHeight() or rh) + 0.5) / rh)) end
   function list:SetItems(items) self.items = items; self:Render() end
   function list:SetSelected(fn) self.isSelected = fn; self:Render() end
   function list:Render()
