@@ -11,7 +11,7 @@ local TABS = {
   { "writs", "Writs" }, { "lw", "Leatherworking" }, { "market", "Market" },
   { "history", "History" }, { "settings", "Settings" },
 }
-local WIDTH, HEIGHT = 940, 580
+local WIDTH, HEIGHT = 1220, 600
 
 function UI.AddTab(key, build, refresh) UI.builders[key], UI.refreshers[key] = build, refresh end
 

@@ -100,12 +100,9 @@ local function Build(p)
   p.status:SetPoint("BOTTOMLEFT", 0, 2)
   p.status:SetWidth(COLS.width)
 
-  local note = T.Label(p, "small", "dim")
-  note:SetPoint("TOPLEFT", p.heads, "TOPRIGHT", T.PAD, 0)
-  note:SetPoint("RIGHT", p, "RIGHT")
-  note:SetWordWrap(true)
-  note:SetText("Details of the selected flip (verdict, checks, your record) come here in the next piece. "
-    .. "Until then the old window shows them: /flip.")
+  p.details = UI.Details(p)
+  p.details:SetPoint("TOPLEFT", p.heads, "TOPRIGHT", T.PAD, 0)
+  p.details:SetPoint("BOTTOMRIGHT", 0, 0)
 end
 
 local function Refresh(p)
@@ -115,6 +112,7 @@ local function Refresh(p)
   p.list:SetItems(items)
   local open = ns.AHOpen()
   p.check:SetEnabled(open and Selected() ~= nil)
+  p.details:SetRule(Selected())
   p.checkAll:SetEnabled(open and not ns.ScanBusy(true))
   p.checkAll:SetLabel(ns.ScanBusy(true) and "Scanning..." or "Check all")
   local lw = FlipRulesDB.lw
