@@ -109,7 +109,7 @@ local function AHRow(id)
   if not l then return r end
   local c = {}
   for k, v in pairs(r or {}) do c[k] = v end
-  c.minBuyout, c.liveMin, c.itemID = l.min, l.min, id
+  c.minBuyout, c.liveMin, c.liveOwn, c.itemID = l.min, l.min, l.own, id
   return c
 end
 
@@ -169,9 +169,13 @@ end
 
 local function CraftsPerStation() return math.max(1, tonumber(FlipRulesDB and FlipRulesDB.craftsPerStation) or 10) end
 
+-- Units sold a day: AHledger's crowd figure, else FlipRules' own estimate from its full scans.
+-- Second value: "crowd" or "own".
 local function PerDay(id)
   local r = AHRow(id)
-  return r and r.soldPerDay
+  if r and r.soldPerDay then return r.soldPerDay, "crowd" end
+  local own = ns.OwnPace(id)
+  if own then return own, "own" end
 end
 
 ---------------------------------------------------------------- math (pure)
@@ -359,6 +363,29 @@ local function SelfTest()
   br[3].minPrice = 5000
   assert(select(5, ns.CheapestVariant(br, 8210)) == br[3].itemKey, "your variant cheapest: search it")
   assert(ns.CheapestVariant({}, 8210) == nil, "no variants listed")
+  -- never undercut yourself
+  assert(ns.PostPrice(500, nil, 450) == 450 and ns.PostPrice(500, nil, 500) == 500, "your auction is cheapest: match it")
+  assert(ns.PostPrice(500, nil, 600) == 499 and ns.PostPrice(nil, 300, 450) == 450, "others cheaper: undercut them")
+  assert(select(4, ns.Lowest({ { price = 300, qty = 2, own = 1 }, { price = 200, qty = 1, own = 0 } })) == 300, "your cheapest")
+  -- full scan
+  local acc = {}
+  ns.ScanAdd(acc, 7, 20, 2000, "Other", false, false)
+  ns.ScanAdd(acc, 7, 20, 2000, "Other", false, true)
+  ns.ScanAdd(acc, 7, 5, 400, "Me-Realm", true, false)
+  ns.ScanAdd(acc, 7, 1, 0, "Other", false, false) -- bid only: counted, no price
+  assert(acc[7].n == 46 and acc[7].own == 5 and acc[7].min == 100 and acc[7].ownMin == 80, "scan totals")
+  assert(acc[7].keys["Other:100:20"].c == 2 and acc[7].keys["Other:100:20"].short == 1, "scan keys")
+  assert(ns.IsMine("Me-Realm", { Me = true }) and ns.IsMine("Me", { Me = true }) and not ns.IsMine("Meh", { Me = true })
+    and not ns.IsMine(nil, { Me = true }), "whose auction")
+  local prev = { ["A:100:20"] = { c = 3, short = 1 }, ["B:90:5"] = { c = 1, short = 0 } }
+  local cur = { ["A:100:20"] = { c = 1, short = 0 } }
+  assert(ns.Vanished(prev, cur, 12) == (20 + 5) * 2, "sold a day: gone minus expiring")
+  assert(ns.Vanished(prev, nil, 24) == 45 and ns.Vanished(prev, cur, 0.1) == nil and ns.Vanished(nil, cur, 5) == nil, "vanished edges")
+  local hp = {}
+  ns.Hist(hp, 7, K * 3600, 100, 5, { op = 10 }); ns.Hist(hp, 7, (K + 1) * 3600, 100, 5, { op = 30 })
+  assert(ns.OwnPace(7, (K + 2) * 3600, hp) == 20 and ns.OwnPace(7, (K + 400) * 3600, hp) == nil, "own pace: last week only")
+  local gs, rest = ns.GroupByClass({ 1, 2, 3, 4 }, function(id) if id == 4 then return nil end return 7, id == 3 and 2 or 1 end)
+  assert(#gs == 2 and #gs[1].ids == 2 and gs[1].subClassID == 1 and #rest == 1 and rest[1] == 4, "group by class")
   print("|cff33ff99FlipRules|r self-test passed")
 end
 
@@ -550,8 +577,11 @@ local function Evaluated(r)
     perDay, wsum = perDay + w * (PerDay(id) or 0), wsum + w
   end
   if wsum > 0 then perDay, outs = perDay / wsum, 1 end
+  local paceOwn = false
   for id in pairs(rule.outputs or {}) do
-    local pd = PerDay(id) or 0
+    local pd, src = PerDay(id)
+    paceOwn = paceOwn or src == "own"
+    pd = pd or 0
     perDay = outs == 0 and pd or math.min(perDay, pd); outs = outs + 1
   end
 
@@ -566,7 +596,7 @@ local function Evaluated(r)
   local nPriced = #(rule.pool or {})
   for _ in pairs(rule.outputs or {}) do nPriced = nPriced + 1 end
   return { rule = r, cost = cost, value = value, profit = profit, worst = worst, best = best, safe = safe,
-    maxBuy = maxBuy, perDay = perDay, unpriced = unpriced, unpricedShare = nPriced > 0 and unpriced / nPriced or 0,
+    maxBuy = maxBuy, perDay = perDay, paceOwn = paceOwn, unpriced = unpriced, unpricedShare = nPriced > 0 and unpriced / nPriced or 0,
     opens = s and s.opens or 0, observed = observed, safeValue = safeValue, evalRule = rule, weights = weights }
 end
 
@@ -575,7 +605,8 @@ function ns.Checks(e)
   local c = {
     { (e.safe or 0) > 0, ("Makes money at cautious prices: %s a run"):format(Money(e.safe)) },
     { not (e.worst and e.worst < 0), ("Still makes money at the week's lowest price: %s a run"):format(Money(e.worst)) },
-    { e.perDay >= 1, ("Sells often enough: ~%.1f a day on the AH (want 1+)"):format(e.perDay) },
+    { e.perDay >= 1, ("Sells often enough: ~%.1f a day on the AH%s (want 1+)"):format(e.perDay,
+      e.paceOwn and ", from your scans" or "") },
     { e.unpricedShare <= 0.25, ("Prices known for %d%% of the results (want 75%%+)"):format(100 - 100 * e.unpricedShare) },
   }
   if e.rule.pool then c[#c + 1] = { e.observed, ("Odds are your own: %d of %d opens recorded"):format(e.opens, MIN_OBSERVED) } end
@@ -685,6 +716,7 @@ for _, c in ipairs(COLS) do
 end
 
 local RefreshAll
+function ns.RefreshAll() RefreshAll() end
 
 -- mouse wheel over the list scrolls it (rows don't take the wheel, so it reaches this frame)
 local listArea = CreateFrame("Frame", nil, frame)
@@ -912,7 +944,7 @@ local function FinishSearch(s)
   if searching ~= s then return end
   searching = nil
   if FlipRulesDB then
-    FlipRulesDB.live[s.id] = { min = s.best, n = s.n or 0, top = s.mins, variants = s.variants, t = time(), v = LIVE_V }
+    FlipRulesDB.live[s.id] = { min = s.best, n = s.n or 0, top = s.mins, variants = s.variants, own = s.own, t = time(), v = LIVE_V }
     ns.Hist(FlipRulesDB.hist, s.id, time(), s.best, s.n or 0)
   end
   Pump()
@@ -971,7 +1003,7 @@ end
 
 Pump = function()
   local AH = C_AuctionHouse
-  if searching or not ahOpen or not (AH and AH.SendSearchQuery and AH.MakeItemKey) then return end
+  if searching or ns.ScanBusy() or not ahOpen or not (AH and AH.SendSearchQuery and AH.MakeItemKey) then return end
   if AH.IsThrottledMessageSystemReady and not AH.IsThrottledMessageSystemReady() then return end -- THROTTLED_SYSTEM_READY pumps
   local id = table.remove(searchQueue, 1)
   if not id then return end
@@ -1005,19 +1037,24 @@ local function Check(ids)
   end
   Pump()
 end
+ns.Check, ns.Pump, ns.LIVE_V = Check, function() Pump() end, LIVE_V
+function ns.SearchesLeft() return #searchQueue + (searching and 1 or 0) end
+function ns.Searching() return searching ~= nil end
 
--- Cheapest unit price not yours, and how many are listed. Pure.
+-- Cheapest unit price not yours, how many are listed (not yours), the 5 cheapest, and your own
+-- cheapest. Pure.
 function ns.Lowest(rows)
-  local n, top = 0, {}
+  local n, top, own = 0, {}, nil
   for _, r in ipairs(rows) do
     if r.price and r.price > 0 and r.own < r.qty then
       n = n + r.qty - r.own
       top[#top + 1] = math.floor(r.price)
     end
+    if r.price and r.price > 0 and r.own > 0 and (not own or r.price < own) then own = math.floor(r.price) end
   end
   table.sort(top)
   for i = #top, 6, -1 do top[i] = nil end -- the 5 cheapest auctions, for the sanity check
-  return top[1], n, top
+  return top[1], n, top, own
 end
 
 local function ReadResults(event, arg) -- arg: the item id (commodities) or the item key
@@ -1044,20 +1081,21 @@ end
 local function OnResults(event, arg)
   local ok, id, rows = pcall(ReadResults, event, arg)
   if not ok or not id or not FlipRulesDB then return end
-  local min, n, top = ns.Lowest(rows)
+  local min, n, top, own = ns.Lowest(rows)
   local s = searching
   if s and s.id == id and s.key then -- the variant holding your auction: its cheapest not yours
     if min and (not s.best or min < s.best) then s.best = min end
+    s.own = own
     return FinishSearch(s)
   end
   if s and s.id == id and not s.browse then -- plain item search (name wasn't loaded)
-    s.best, s.n, s.mins, s.variants = min, n, top, nil
+    s.best, s.n, s.mins, s.variants, s.own = min, n, top, nil, own
     return FinishSearch(s)
   end
   -- a search you did yourself: one variant only, so it can't replace an all-variant check
   local l = FlipRulesDB.live[id]
   if l and l.variants and l.variants > 1 and time() - l.t <= LIVE_FRESH then return end
-  FlipRulesDB.live[id] = { min = min, n = n, top = top, t = time(), v = LIVE_V }
+  FlipRulesDB.live[id] = { min = min, n = n, top = top, own = own, t = time(), v = LIVE_V }
   ns.Hist(FlipRulesDB.hist, id, time(), min, n)
 end
 
@@ -1080,9 +1118,12 @@ local function RuleItems(r)
   end
   return ids
 end
+ns.RuleItems = RuleItems
 
--- Cheapest listing minus 1 copper (no listing: `fallback`). Pure.
-function ns.PostPrice(min, fallback)
+-- Cheapest listing not yours minus 1 copper (no listing: `fallback`). When your own auction is
+-- already the cheapest (`own`), match it instead of undercutting yourself. Pure.
+function ns.PostPrice(min, fallback, own)
+  if own and own >= 1 and (not min or own <= min) then return math.floor(own) end
   local p = min and min - 1 or fallback
   return p and p >= 1 and math.floor(p) or nil
 end
@@ -1095,7 +1136,7 @@ local function PostQueue(r)
     local n = bags[id] or 0
     if n > 0 then
       local row = AHRow(id)
-      q[#q + 1] = { id = id, n = n, cur = row and row.minBuyout, price = ns.PostPrice(row and row.minBuyout, price(id, false)) }
+      q[#q + 1] = { id = id, n = n, cur = row and row.minBuyout, price = ns.PostPrice(row and row.minBuyout, price(id, false), row and row.liveOwn) }
     end
   end
   -- most valuable first; unpriced ones last (shown, never posted)
@@ -1117,6 +1158,7 @@ local function FindSlot(id)
 end
 
 local function Say(s) print("|cff33ff99FlipRules|r " .. s) end
+ns.Say = Say
 
 -- No confirmation or error from the AH is not a success: say so instead of claiming "posted".
 local function WaitPost(p)
@@ -1445,7 +1487,15 @@ function ns.Hist(hist, id, t, min, n, extra)
   h[ns.Slot(t)] = d
   if t >= (d.t or 0) then d.min, d.n, d.t = min, n, t end -- sources arrive out of order: newest wins
   if min and (not d.lo or min < d.lo) then d.lo = min end
-  if extra then d.md, d.pd = extra.md or d.md, extra.pd or d.pd end
+  if extra then d.md, d.pd, d.op = extra.md or d.md, extra.pd or d.pd, extra.op or d.op end
+end
+-- FlipRules' own units-sold-a-day estimate: the average over the last week's full scans; nil without one.
+function ns.OwnPace(id, now, hist)
+  local h = (hist or FlipRulesDB and FlipRulesDB.hist or {})[id]
+  if not h then return nil end
+  local from, sum, n = ns.Slot(now or time()) - WEEK, 0, 0
+  for k, d in pairs(h) do if k >= from and d.op then sum, n = sum + d.op, n + 1 end end
+  return n > 0 and sum / n or nil, n
 end
 function ns.PruneHist(hist, t)
   for id, h in pairs(hist) do
@@ -1629,58 +1679,20 @@ function ns.ScanStep(data, pos, wanted, acc, max)
 end
 
 do
-local STEP = 20000 -- listings a frame
-local function Server() return tonumber((UnitGUID("player") or ""):match("^Player%-(%d+)%-")) end
 local function Wanted()
   local w = {}
   for _, r in ipairs(ns.rules) do for _, id in ipairs(RuleItems(r)) do w[id] = true end end
   return w
 end
-local busy = false
+-- AHledger's downloaded crowd table only (docs/adr/0001): its own AH scans are not used.
 ns.ImportAHledger = function()
-  if busy or not FlipRulesDB then return end
-  local H, done, wanted = FlipRulesDB.hist, FlipRulesDB.histScans or {}, Wanted()
-  FlipRulesDB.histScans = done
-  if AHledgerAPI and AHledgerAPI.GetPrice then -- the price table: lowest listing and count at its update
-    for id in pairs(wanted) do
-      local p = AHledgerAPI.GetPrice(id)
-      if p and p.updated and not p.snapshot then
-        ns.Hist(H, id, p.updated, p.minBuyout, p.quantity, { md = p.median, pd = p.soldPerDay })
-      end
+  if not (FlipRulesDB and AHledgerAPI and AHledgerAPI.GetPrice) then return end
+  for id in pairs(Wanted()) do -- the lowest listing, count, median and pace at the table's update
+    local p = AHledgerAPI.GetPrice(id)
+    if p and p.updated and not p.snapshot then
+      ns.Hist(FlipRulesDB.hist, id, p.updated, p.minBuyout, p.quantity, { md = p.median, pd = p.soldPerDay })
     end
   end
-  local me, faction, oldest, todo = Server(), UnitFactionGroup("player"), time() - 30 * 86400, {}
-  for _, sc in ipairs(type(AHledgerDB) == "table" and type(AHledgerDB.scans) == "table" and AHledgerDB.scans or {}) do
-    local key = ("%s:%s"):format(tostring(sc.ts), tostring(sc.server))
-    -- WoW Forever is one mega server: every scan of your faction is your auction house. A scan with
-    -- another server number is still skipped. shortcut: assumes one account playing; revisit if realms split
-    local here = sc.faction == faction and (sc.server == nil or sc.server == me)
-    if sc.full and type(sc.data) == "string" and sc.ts and sc.ts > oldest and here and not done[key] then
-      todo[#todo + 1] = { sc = sc, key = key }
-    end
-  end
-  if #todo == 0 then return end
-  busy = true
-  local i, pos, acc = 1, 1, {}
-  local function step()
-    local job = todo[i]
-    pos = ns.ScanStep(job.sc.data, pos, wanted, acc, STEP)
-    if not pos then
-      for id in pairs(wanted) do
-        local a = acc[id]
-        ns.Hist(H, id, job.sc.ts, a and a.min, a and a.n or 0) -- not in a full scan: none listed
-      end
-      done[job.key] = true
-      i, pos, acc = i + 1, 1, {}
-      if not todo[i] then
-        busy = false
-        Say(("added %d AHledger scan%s to the price history."):format(#todo, #todo == 1 and "" or "s"))
-        return RefreshAll()
-      end
-    end
-    C_Timer.After(0, step)
-  end
-  C_Timer.After(0, step)
 end
 end
 
@@ -2710,13 +2722,15 @@ checkAllBtn:SetScript("OnClick", function()
   for _, r in ipairs(ns.rules) do
     if r.group == "Leatherworking" then for _, id in ipairs(RuleItems(r)) do ids[#ids + 1] = id end end
   end
-  Check(ids) -- drops duplicates
+  ns.CheckAll(ids)
 end)
 checkAllBtn:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_TOP")
   GameTooltip:AddLine("Check every leatherworking flip")
-  GameTooltip:AddLine("Searches every item of every leatherworking rule: products, reagents down the chains, "
-    .. "stations. Each item is searched once. Check prices does only the selected rule.", 1, 1, 1, true)
+  GameTooltip:AddLine("Prices every item of every leatherworking rule: products, reagents down the chains, "
+    .. "stations. A full scan of the auction house when one is allowed (every 15 minutes), otherwise a few "
+    .. "queries by item class. Check prices does only the selected rule.", 1, 1, 1, true)
+  GameTooltip:AddLine(ns.ScanStatus(), 0.7, 0.7, 0.7, true)
   GameTooltip:Show()
 end)
 checkAllBtn:SetScript("OnLeave", GameTooltip_Hide)
@@ -2782,6 +2796,7 @@ RefreshAll = function()
   ahCheck:SetChecked(FlipRulesDB.withAH and true or false)
   checkBtn:SetShown(ahOpen)
   checkAllBtn:SetShown(ahOpen and FlipRulesDB.filter == "Leatherworking")
+  checkAllBtn:SetText(ns.ScanBusy(true) and "Scanning..." or "Check all LW")
   if not mailBox:HasFocus() then mailBox:SetText(FlipRulesDB.mailChars or MAIL_CHARS) end
   local left = #searchQueue + (searching and 1 or 0)
   checkBtn:SetText(left > 0 and ("Checking (%d)"):format(left) or "Check prices")
@@ -2866,6 +2881,9 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     FlipRulesDB.earn = FlipRulesDB.earn or {}
     FlipRulesDB.hist = FlipRulesDB.hist or {}
     FlipRulesDB.track = FlipRulesDB.track or {}
+    FlipRulesDB.scan = FlipRulesDB.scan or {}
+    FlipRulesDB.chars = FlipRulesDB.chars or {}
+    FlipRulesDB.chars[UnitName("player")] = true -- whose auctions are yours in a full scan
     ns.PruneHist(FlipRulesDB.hist, time())
     C_Timer.After(10, ns.ImportAHledger) -- after login settles
     FlipRulesDB.seen = nil -- 0.1 format, replaced by stats
@@ -2916,7 +2934,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
   -- the game clears the Send Mail form on open and after each send: refill it a moment later
   if event == "MAIL_SHOW" or event == "MAIL_SEND_SUCCESS" then C_Timer.After(0.2, FillSendMail) end
   if event == "MAIL_SEND_INFO_UPDATE" then FillSendMail() end
-  if event == "AUCTION_HOUSE_CLOSED" then searchQueue, searching = {}, nil; C_Timer.After(15, ns.ImportAHledger) end -- a scan AHledger just saved
+  if event == "AUCTION_HOUSE_CLOSED" then searchQueue, searching = {}, nil; C_Timer.After(15, ns.ImportAHledger) end
   if event == "BAG_UPDATE_DELAYED" then TrackOpens() end
   if TRADE_EVENTS[event] then ScanTradeSkill() end
   RefreshAll()
