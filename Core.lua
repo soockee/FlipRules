@@ -274,6 +274,11 @@ local function SelfTest()
   assert(su.rows[1].id == 2 and su.rows[1].after == 15 and su.rows[2].after == 3.5, "supply days after buying")
   assert(su.fastShare == 0.5 and su.stock == 12 and su.perDay == 3 and su.after == 22 / 3, "supply totals")
   assert(su.rows[3].after == 0 and ns.Supply({}, 0).fastShare == 1, "supply edge cases")
+  local mv = ns.Movers({ { id = 1, perDay = 100, listed = 25, price = 10 }, { id = 2, perDay = 5, listed = 0, price = 1000 },
+    { id = 3, listed = 4, price = 50 } }, "gold")
+  assert(mv[1].id == 2 and mv[1].gold == 5000 and mv[2].cover == 6 and mv[2].short, "movers: gold order, cover, short")
+  assert(not mv[1].short and mv[3].cover == math.huge, "movers: slow sellers aren't short, unsold has no cover")
+  assert(ns.Movers(mv, "cover")[1].id == 2 and ns.Movers(mv, "sold")[1].id == 1, "movers: other sorts")
   local tr = {}
   ns.Track(tr, "post", 7, 2, 0, 10000, 6000)
   ns.Track(tr, "post", 7, 1, 3600, 12000, nil)
@@ -2262,8 +2267,109 @@ end
 
 local function Days(d) return d == math.huge and "never" or d >= STOCK_MAX and ("%d+d"):format(STOCK_MAX) or ("%.1fd"):format(d) end
 
+-- Movers: every item FlipRules knows, ranked by how much moves through the AH. cover = hours until
+-- what's listed now sells out at the current pace; under SHORT_COVER hours on a busy item it is
+-- likely under-supplied. Pure: rows = { { id, perDay, listed, price } }.
+local SHORT_COVER, BUSY = 12, 10 -- hours of cover; units sold a day
+function ns.Movers(rows, key)
+  for _, r in ipairs(rows) do
+    r.gold = (r.perDay or 0) * (r.price or 0)
+    r.cover = (r.perDay or 0) > 0 and r.listed / r.perDay * 24 or math.huge
+    r.short = r.cover < SHORT_COVER and (r.perDay or 0) >= BUSY
+  end
+  local by = key == "sold" and function(a, b) return (a.perDay or 0) > (b.perDay or 0) end
+    or key == "cover" and function(a, b) if a.cover ~= b.cover then return a.cover < b.cover end return a.gold > b.gold end
+    or function(a, b) return a.gold > b.gold end
+  table.sort(rows, by)
+  return rows
+end
+
+local moverMode, moverKey = false, "gold"
+local mRows = {}
+for i = 1, SROWS do
+  local y = SY - (i - 1) * 15
+  mRows[i] = { SText(stock, 14, y, 210), SText(stock, 230, y, 70), SText(stock, 305, y, 60),
+    SText(stock, 370, y, 60), SText(stock, 435, y, 70), SText(stock, 510, y, 80) }
+  for _, fs in ipairs(mRows[i]) do fs:Hide() end
+end
+for c = 2, 6 do for i = 1, SROWS do mRows[i][c]:SetJustifyH("RIGHT") end end
+local mHead = { SText(stock, 14, SY + 16, 210, "GameFontNormalSmall"), SText(stock, 230, SY + 16, 70, "GameFontNormalSmall"),
+  SText(stock, 305, SY + 16, 60, "GameFontNormalSmall"), SText(stock, 370, SY + 16, 60, "GameFontNormalSmall"),
+  SText(stock, 435, SY + 16, 70, "GameFontNormalSmall"), SText(stock, 510, SY + 16, 80, "GameFontNormalSmall") }
+for i, t in ipairs({ "Item", "Sold/day", "Listed", "Cover", "Price", "Gold/day" }) do
+  mHead[i]:SetText(t); if i > 1 then mHead[i]:SetJustifyH("RIGHT") end; mHead[i]:Hide()
+end
+
+local sortBtns = {}
+local function MoverItems()
+  local ids, seen = {}, {}
+  local function add(id) if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end end
+  for _, r in ipairs(ns.rules) do add(r.use); for _, id in ipairs(RuleItems(r)) do add(id) end end
+  for id, rec in pairs(ns.recipes) do add(id); for rid in pairs(rec.reagents or {}) do add(rid) end end
+  local rows = {}
+  for _, id in ipairs(ids) do
+    local pd = PerDay(id)
+    if pd and not ns.vendor[id] then
+      local a = AHRow(id)
+      rows[#rows + 1] = { id = id, perDay = pd, listed = (Listed(id)), price = a and (a.median or a.minBuyout) or 0 }
+    end
+  end
+  return ns.Movers(rows, moverKey)
+end
+
+local function Count(n) return n >= 10000 and ("%.0fk"):format(n / 1000) or n >= 100 and ("%.0f"):format(n) or ("%.1f"):format(n) end
+local function Cover(h) return h == math.huge and "-" or h >= 48 and ("%.0fd"):format(h / 24) or ("%.0fh"):format(h) end
+
+local function RefreshMovers()
+  sealLabel:Hide(); sealBox:Hide(); sLegend:Hide(); okLine:Hide()
+  for _, x in ipairs(sRows) do x.name:Hide(); x.base:Hide(); x.mine:Hide(); x.val:Hide() end
+  for _, h in ipairs(mHead) do h:Show() end
+  for _, b in pairs(sortBtns) do b:Show() end
+  for k, b in pairs(sortBtns) do if k == moverKey then b:LockHighlight() else b:UnlockHighlight() end end
+  local rows = MoverItems()
+  local short = 0
+  for _, r in ipairs(rows) do if r.short then short = short + 1 end end
+  sHead:SetText(("Movers  -  %d items, |cffff6060%d likely under-supplied|r"):format(#rows, short))
+  sSum:SetText(("Gold/day = sold a day x price: where the money moves. Cover = hours until what's listed sells out. "
+    .. "|cffff6060Red|r: under %dh of cover while selling %d+ a day. Sold/day is AHledger's estimate from players' scans "
+    .. "(it leans low); listed is your live check if under an hour old."):format(SHORT_COVER, BUSY))
+  sOffset = math.max(0, math.min(sOffset, #rows - SROWS))
+  for i, x in ipairs(mRows) do
+    local it = rows[i + sOffset]
+    for _, fs in ipairs(x) do fs:SetShown(it and true or false) end
+    if it then
+      local c = it.short and "|cffff6060" or "|cffffffff"
+      x[1]:SetText(c .. (Name(it.id):gsub("^Craftsman's Writ: ", "Writ: ")) .. "|r")
+      x[2]:SetText(Count(it.perDay)); x[3]:SetText(Count(it.listed)); x[4]:SetText(c .. Cover(it.cover) .. "|r")
+      x[5]:SetText(Money(it.price)); x[6]:SetText(Money(math.floor(it.gold)))
+    end
+  end
+end
+
+for i, k in ipairs({ { "gold", "Gold/day" }, { "sold", "Sold/day" }, { "cover", "Cover" } }) do
+  local b = CreateFrame("Button", nil, stock, "UIPanelButtonTemplate")
+  b:SetSize(70, 18)
+  b:SetPoint("TOPLEFT", 380 + (i - 1) * 72, -30)
+  b:SetText(k[2])
+  b:SetScript("OnClick", function() moverKey = k[1]; sOffset = 0; RefreshStock() end)
+  b:Hide()
+  sortBtns[k[1]] = b
+end
+
+local modeBtn = CreateFrame("Button", nil, stock, "UIPanelButtonTemplate")
+modeBtn:SetSize(80, 18)
+modeBtn:SetPoint("TOPRIGHT", -30, -4)
+modeBtn:SetScript("OnClick", function() moverMode = not moverMode; sOffset = 0; RefreshStock() end)
+
 RefreshStock = function()
   if not stock:IsShown() then return end
+  modeBtn:SetText(moverMode and "Writs" or "Movers")
+  sHead:SetWidth(moverMode and 360 or 570)
+  if moverMode then return RefreshMovers() end
+  for _, h in ipairs(mHead) do h:Hide() end
+  for _, b in pairs(sortBtns) do b:Hide() end
+  for _, x in ipairs(mRows) do for _, fs in ipairs(x) do fs:Hide() end end
+  sealLabel:Show(); sealBox:Show(); sLegend:Show(); okLine:Show()
   local r = selected
   if not (r and r.pool and r.use) then sHead:SetText("Select a sealed writ rule.") sSum:SetText("") for _, x in ipairs(sRows) do x.name:Hide(); x.base:Hide(); x.mine:Hide(); x.val:Hide() end return end
   local e = Evaluated(r)
@@ -2316,12 +2422,17 @@ stockBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 stockBtn:SetSize(120, 22)
 stockBtn:SetPoint("TOPRIGHT", -14, -32)
 stockBtn:SetText("Stock & demand")
-stockBtn:SetScript("OnClick", function() stock:SetShown(not stock:IsShown()) end)
+stockBtn:SetScript("OnClick", function()
+  if not (selected and selected.pool and selected.use) then moverMode = true end -- writs view needs a sealed writ rule
+  stock:SetShown(not stock:IsShown())
+end)
 stockBtn:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_TOP")
   GameTooltip:AddLine("Stock & demand")
-  GameTooltip:AddLine("Would buying up the sealed writs flood the market? For each writ: days until what's listed "
+  GameTooltip:AddLine("Writs: would buying up the sealed writs flood the market? For each writ: days until what's listed "
     .. "sells at today's pace, now and after your opened writs are added by their drop odds.", 1, 1, 1, true)
+  GameTooltip:AddLine("Movers: every item FlipRules knows, ranked by gold moved a day, units sold a day, or hours "
+    .. "until the listings run out. Red = busy and nearly sold out.", 1, 1, 1, true)
   GameTooltip:Show()
 end)
 stockBtn:SetScript("OnLeave", GameTooltip_Hide)
@@ -2679,7 +2790,7 @@ RefreshAll = function()
   RefreshStock()
   ns.RefreshHist()
   ns.histBtn:SetShown(selected and true or false)
-  stockBtn:SetShown(selected and selected.use and selected.pool and true or false)
+  stockBtn:Show()
 end
 frame:SetScript("OnShow", function() RefreshAll() end)
 
