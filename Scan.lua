@@ -140,7 +140,7 @@ local function FinishFull()
   end
   db.scan.keys, db.scan.at, db.scan.count = keys, t, f.count
   full = nil
-  ns.Say(("full scan done: %d listings read, %d of your items listed."):format(f.count, seen))
+  ns.Say(("full scan done: %d listings read, %d of the items FlipRules knows are listed."):format(f.count, seen))
   ns.Pump()
   ns.RefreshAll()
 end

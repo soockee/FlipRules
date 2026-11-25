@@ -26,6 +26,9 @@ end
 ns.recipes, ns.vendor, ns.stations = {}, {}, {}
 function FlipRules.Recipe(id, makes, reagents) ns.recipes[id] = { makes = makes, reagents = reagents } end
 function FlipRules.Vendor(prices) for id, c in pairs(prices) do ns.vendor[id] = c end end
+-- Craftsman's Writs that ask for a leatherworking product: ns.writLinks[product] = { tier, writ, station }.
+ns.writLinks = {}
+function FlipRules.WritLink(product, tier, writ, station) ns.writLinks[product] = { tier = tier, writ = writ, station = station } end
 -- A camp station a craft rule needs (placing one uses it up); reagents = its own recipe, or nil.
 function FlipRules.Station(id, reagents)
   ns.stations[id] = true
@@ -363,6 +366,14 @@ local function SelfTest()
   br[3].minPrice = 5000
   assert(select(5, ns.CheapestVariant(br, 8210)) == br[3].itemKey, "your variant cheapest: search it")
   assert(ns.CheapestVariant({}, 8210) == nil, "no variants listed")
+  -- craft flips from learned recipes
+  local fl, it = ns.BuildCrafts({ { name = "Ball", inputs = { [1] = 2 }, outputs = { [10] = 1 } },
+    { name = "Bound Helm", inputs = { [1] = 5 }, outputs = { [11] = 1 } },
+    { name = "Leather", inputs = { [2] = 4 }, outputs = { [1] = 1 } }, { name = "No reagents", inputs = {}, outputs = { [12] = 1 } } },
+    { [10] = { tier = "Journeyman", writ = 99, station = 98 } }, function(id) return id == 11 end)
+  assert(#fl == 2 and fl[1].name == "Leather" and fl[2].name == "[Journeyman] Ball" and fl[2].writ == 99
+    and fl[2].station == 98 and fl[1].writ == nil and fl[2].group == "Leatherworking" and fl[2].craft, "craft flips")
+  assert(it[11] and it[1].makes == 1 and it[1].reagents[2] == 4 and not it[12], "intermediates include bound products")
   -- never undercut yourself
   assert(ns.PostPrice(500, nil, 450) == 450 and ns.PostPrice(500, nil, 500) == 500, "your auction is cheapest: match it")
   assert(ns.PostPrice(500, nil, 600) == 499 and ns.PostPrice(nil, 300, 450) == 450, "others cheaper: undercut them")
@@ -526,10 +537,30 @@ local function ScanModern(craft)
   end
 end
 
-local function ScanTradeSkill()
+local LW_SKILL = 165 -- Leatherworking's profession id
+
+local function IsLeatherworking()
+  if C_TradeSkillUI and C_TradeSkillUI.GetBaseProfessionInfo then
+    local ok, info = pcall(C_TradeSkillUI.GetBaseProfessionInfo)
+    if ok and info then
+      return info.professionID == LW_SKILL or info.parentProfessionID == LW_SKILL or info.professionName == "Leatherworking"
+    end
+  end
+  return GetTradeSkillLine and GetTradeSkillLine() == "Leatherworking"
+end
+
+local function Linked() -- someone else's recipe list, opened from a chat link
+  if C_TradeSkillUI and C_TradeSkillUI.IsTradeSkillLinked then
+    local ok, l = pcall(C_TradeSkillUI.IsTradeSkillLinked)
+    if ok and l then return true end
+  end
+  return IsTradeSkillLinked and IsTradeSkillLinked() and true or false
+end
+
+local function ReadTradeSkill()
   local craft = {}
   if C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs and C_TradeSkillUI.GetRecipeSchematic then ScanModern(craft) end
-  if #craft > 0 or not GetNumTradeSkills then ns.craft = craft return end
+  if #craft > 0 or not GetNumTradeSkills then return craft end
   for i = 1, GetNumTradeSkills() do
     local name, kind = GetTradeSkillInfo(i)
     local out = kind ~= "header" and ItemID(GetTradeSkillItemLink(i))
@@ -544,10 +575,24 @@ local function ScanTradeSkill()
       craft[#craft + 1] = r
     end
   end
-  ns.craft = craft
+  return craft
+end
+
+-- An open profession window: Leatherworking is saved (account-wide) as your crafter's learned
+-- recipes and becomes craft flips; any other profession is listed under All until you log out.
+local function ScanTradeSkill()
+  local craft = ReadTradeSkill()
+  if not IsLeatherworking() then ns.craft = craft return end
+  if Linked() or #craft == 0 then return end
+  local old = FlipRulesDB.lw and #FlipRulesDB.lw.recipes or 0
+  FlipRulesDB.lw = { char = UnitName("player"), t = time(), recipes = craft }
+  ns.RebuildCrafts()
+  if #craft ~= old then ns.Say(("%d learned leatherworking recipes saved."):format(#craft)) end
 end
 
 ---------------------------------------------------------------- evaluation
+
+local CRAFTS_A_DAY = 10 -- profit a day counts at most this many sold a day
 
 -- With enough opens, value the pool by what you actually got (including items outside the pool).
 local function Evaluated(r)
@@ -596,6 +641,7 @@ local function Evaluated(r)
   local nPriced = #(rule.pool or {})
   for _ in pairs(rule.outputs or {}) do nPriced = nPriced + 1 end
   return { rule = r, cost = cost, value = value, profit = profit, worst = worst, best = best, safe = safe,
+    profitDay = profit and profit * math.min(perDay, CRAFTS_A_DAY), -- capped: you can only craft and post so many
     maxBuy = maxBuy, perDay = perDay, paceOwn = paceOwn, unpriced = unpriced, unpricedShare = nPriced > 0 and unpriced / nPriced or 0,
     opens = s and s.opens or 0, observed = observed, safeValue = safeValue, evalRule = rule, weights = weights }
 end
@@ -627,19 +673,16 @@ function ns.Verdict(e)
 end
 
 -- The list filter: "all", "writs" (rules you open), or a rule group such as "Leatherworking".
--- Specializations you can craft; recipes of the others are hidden. Default: Dragonscale only.
-local SPECS = { "Dragonscale", "Elemental", "Tribal" }
-local function HasSpec(spec)
-  local s = FlipRulesDB and FlipRulesDB.specs
-  if not s then return spec == "Dragonscale" end
-  return s[spec] and true or false
-end
+-- The Leatherworking tab shows the writ-linked craft flips, or all of them (FlipRulesDB.lwView).
+local function LWAll() return FlipRulesDB and FlipRulesDB.lwView == "all" end
+local function OnLW() return FlipRulesDB and FlipRulesDB.filter == "Leatherworking" end
+local function ByDay() return OnLW() and FlipRulesDB.lwSort ~= "profit" end
 
 local function Shown(r)
-  if r.spec and not HasSpec(r.spec) then return false end
   local f = FlipRulesDB and FlipRulesDB.filter or "all"
   if f == "all" then return true end
   if f == "writs" then return r.use ~= nil end
+  if f == "Leatherworking" and r.group == f then return LWAll() or r.writ ~= nil end
   return r.group == f
 end
 
@@ -647,7 +690,8 @@ local function Results()
   local list = {}
   for _, r in ipairs(ns.rules) do if Shown(r) then list[#list + 1] = Evaluated(r) end end
   for _, r in ipairs(ns.craft) do if Shown(r) then list[#list + 1] = Evaluated(r) end end
-  table.sort(list, function(a, b) return (a.profit or -math.huge) > (b.profit or -math.huge) end)
+  local key = ByDay() and "profitDay" or "profit"
+  table.sort(list, function(a, b) return (a[key] or -math.huge) > (b[key] or -math.huge) end)
   return list
 end
 
@@ -710,9 +754,11 @@ local function ShowBreakdown(row, e)
 end
 
 local COLS = { { "Rule", 0, 240, "LEFT" }, { "Cost", 245, 80, "RIGHT" }, { "Value", 330, 80, "RIGHT" }, { "Profit", 415, 85, "RIGHT" } }
-for _, c in ipairs(COLS) do
+local colHeads = {}
+for i, c in ipairs(COLS) do
   local h = Text(-30, "GameFontNormalSmall", LX + c[2], c[3])
   h:SetJustifyH(c[4]); h:SetText(c[1])
+  colHeads[i] = h
 end
 
 local RefreshAll
@@ -738,30 +784,33 @@ for _, f in ipairs(FILTERS) do
   fprev = b
 end
 
--- your Leatherworking specializations, next to the filter; shown with the Leatherworking filter
-local specChecks = {}
-for _, spec in ipairs(SPECS) do
-  local c = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-  c:SetSize(20, 20)
-  c:SetPoint("LEFT", fprev, "RIGHT", fprev == filterBtns.Leatherworking and 10 or 70, 0)
-  c.label = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  c.label:SetPoint("LEFT", c, "RIGHT", 0, 0)
-  c.label:SetText(spec)
-  c:SetScript("OnClick", function(self)
-    if not FlipRulesDB.specs then FlipRulesDB.specs = { Dragonscale = true } end
-    FlipRulesDB.specs[spec] = self:GetChecked() and true or false
-    selected = nil
-    RefreshAll()
-  end)
-  c:SetScript("OnEnter", function(self)
+-- Leatherworking tab: writ-linked craft flips or all of them, next to the filter
+local viewBtns = {}
+for _, v in ipairs({ { "writ", "Writ-linked" }, { "all", "All crafts" } }) do
+  local b = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  b:SetSize(80, 18)
+  b:SetPoint("LEFT", fprev, "RIGHT", fprev == filterBtns.Leatherworking and 10 or 2, 0)
+  b:SetText(v[2])
+  b:SetScript("OnClick", function() FlipRulesDB.lwView = v[1]; listOffset = 0; selected = nil; RefreshAll() end)
+  b:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-    GameTooltip:AddLine(spec .. " Leatherworking")
-    GameTooltip:AddLine("Tick the specializations you have. Writ items that need one you don't have are hidden.", 1, 1, 1, true)
+    GameTooltip:AddLine(v[2])
+    GameTooltip:AddLine(v[1] == "writ" and "Only crafts a Craftsman's Writ asks for." or
+      "Every recipe your crafter has learned, except products that bind when picked up.", 1, 1, 1, true)
     GameTooltip:Show()
   end)
-  c:SetScript("OnLeave", GameTooltip_Hide)
-  specChecks[spec] = c
-  fprev = c
+  b:SetScript("OnLeave", GameTooltip_Hide)
+  viewBtns[v[1]] = b
+  fprev = b
+end
+
+-- Leatherworking tab: click Profit/day or Profit to sort by it
+for i, key in pairs({ [3] = "day", [4] = "profit" }) do
+  local b = CreateFrame("Button", nil, frame)
+  b:SetAllPoints(colHeads[i])
+  b:SetScript("OnClick", function()
+    if OnLW() then FlipRulesDB.lwSort = key; listOffset = 0; RefreshAll() end
+  end)
 end
 
 -- What you actually buy for `qty` of `id`, following the cheapest path down the production chain:
@@ -2777,7 +2826,7 @@ RefreshAll = function()
       local tag = r.recipe and "|cff999999[craft]|r " or r.group and "|cff999999[LW]|r " or ""
       b.cols[1]:SetText(col .. v .. "|r " .. tag .. r.name)
       b.cols[2]:SetText(Money(e.cost))
-      b.cols[3]:SetText(Money(e.value))
+      b.cols[3]:SetText(Money(OnLW() and e.profitDay or e.value))
       b.cols[4]:SetText(Money(e.profit))
       b.sel:SetShown(selected and r.name == selected.name)
       b:Show()
@@ -2786,13 +2835,19 @@ RefreshAll = function()
     end
   end
   local shown = #list > N_ROWS and ("Showing %d-%d of %d, scroll for more. "):format(listOffset + 1, listOffset + N_ROWS, #list) or ""
-  status:SetText(shown .. (#ns.craft == 0 and "Open a profession window to add its recipes." or (#ns.craft .. " recipes scanned.")))
+  local lw = FlipRulesDB.lw
+  status:SetText(shown .. (OnLW() and (lw and ("%d learned recipes of %s, saved %s."):format(#lw.recipes, lw.char,
+    date("%m-%d %H:%M", lw.t)) or "Open your crafter's Leatherworking window once to add the recipes.")
+    or #ns.craft == 0 and "Open a profession window to add its recipes." or (#ns.craft .. " recipes scanned.")))
   for b, btn in pairs(basisBtns) do if b == Basis() then btn:LockHighlight() else btn:UnlockHighlight() end end
   for f, btn in pairs(filterBtns) do if f == (FlipRulesDB.filter or "all") then btn:LockHighlight() else btn:UnlockHighlight() end end
-  for spec, c in pairs(specChecks) do
-    c:SetShown(FlipRulesDB.filter == "Leatherworking")
-    c:SetChecked(HasSpec(spec))
+  for v, btn in pairs(viewBtns) do
+    btn:SetShown(OnLW())
+    if v == (LWAll() and "all" or "writ") then btn:LockHighlight() else btn:UnlockHighlight() end
   end
+  local day = ByDay()
+  colHeads[3]:SetText(OnLW() and ((day and "> " or "") .. "Profit/day") or "Value")
+  colHeads[4]:SetText((OnLW() and not day and "> " or "") .. "Profit")
   ahCheck:SetChecked(FlipRulesDB.withAH and true or false)
   checkBtn:SetShown(ahOpen)
   checkAllBtn:SetShown(ahOpen and FlipRulesDB.filter == "Leatherworking")
@@ -2861,6 +2916,52 @@ mm:SetScript("OnEnter", function(self)
 end)
 mm:SetScript("OnLeave", GameTooltip_Hide)
 
+---------------------------------------------------------------- craft flips from the learned recipes
+
+-- The crafter's learned recipes as craft flips (products that bind on pickup left out, writ links
+-- attached) and as intermediates { [product] = { makes, reagents } }. bop(id) -> true when the
+-- product binds on pickup. Pure.
+function ns.BuildCrafts(recipes, links, bop)
+  local flips, inter = {}, {}
+  for _, rc in ipairs(recipes or {}) do
+    local out, made = next(rc.outputs or {})
+    if out and next(rc.inputs or {}) then
+      inter[out] = { makes = made, reagents = rc.inputs }
+      if not bop(out) then
+        local l = links[out]
+        flips[#flips + 1] = { name = l and ("[%s] %s"):format(l.tier, rc.name) or rc.name, group = "Leatherworking",
+          craft = true, inputs = rc.inputs, outputs = { [out] = made },
+          writ = l and l.writ, tier = l and l.tier, station = l and l.station }
+      end
+    end
+  end
+  table.sort(flips, function(a, b) return a.name < b.name end)
+  return flips, inter
+end
+
+local function IsBop(id)
+  local bind = select(14, GetItemInfo(id))
+  if bind == nil and C_Item and C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
+  return bind == 1 -- unknown until the item loads: kept, and the rebuild after login drops it
+end
+
+-- Replaces the craft flips in ns.rules (in place: other code holds ns.rules) with the saved recipes.
+function ns.RebuildCrafts()
+  local lw = FlipRulesDB and FlipRulesDB.lw
+  local flips, inter = ns.BuildCrafts(lw and lw.recipes, ns.writLinks, IsBop)
+  local keep = {}
+  for _, r in ipairs(ns.rules) do if not r.craft then keep[#keep + 1] = r end end
+  for _, r in ipairs(flips) do keep[#keep + 1] = r end
+  for i = #ns.rules, 1, -1 do ns.rules[i] = nil end
+  for i, r in ipairs(keep) do ns.rules[i] = r end
+  for id, rec in pairs(inter) do ns.recipes[id] = rec end
+  if selected and selected.craft then -- keep the same flip selected
+    local name = selected.name
+    selected = nil
+    for _, r in ipairs(flips) do if r.name == name then selected = r end end
+  end
+end
+
 ---------------------------------------------------------------- events
 
 local ev = CreateFrame("Frame")
@@ -2890,6 +2991,8 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     mmIcon:SetTexture(((C_Item and C_Item.GetItemIconByID) or GetItemIcon)(262890) or "Interface\Icons\INV_Misc_Note_01")
     PlaceMinimapButton()
     TrackOpens() -- baseline bag counts
+    ns.RebuildCrafts()
+    C_Timer.After(5, function() ns.RebuildCrafts(); RefreshAll() end) -- item data loaded by now: bind types known
     -- sale mail names the item but gives no id; names only resolve for items the client has loaded
     if C_Item and C_Item.RequestLoadItemDataByID then
       for _, r in ipairs(ns.rules) do for _, id in ipairs(RuleItems(r)) do C_Item.RequestLoadItemDataByID(id) end end
