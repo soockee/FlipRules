@@ -61,11 +61,10 @@ local function Build(p)
   p.list:SetHeight(math.max(3, #WritRules()) * T.ROW_H)
   p.list:SetSelected(function(e) local s = Selected() return s and e.rule.name == s.name end)
 
-  local hint = T.Label(p, "small", "dim")
-  hint:SetPoint("TOPLEFT", p.list, "BOTTOMLEFT", 0, -T.PAD)
-  hint:SetWidth(COLS.width)
-  hint:SetWordWrap(true)
-  hint:SetText("Opening writs, stock & demand and posting are still in the old window (/flip) until the last piece.")
+  p.bar, p.queue = UI.Actions(p, "writs")
+  p.bar:SetPoint("TOPLEFT", p.list, "BOTTOMLEFT", 0, -T.PAD)
+  p.bar:SetWidth(COLS.width + 8)
+  p.queue:SetPoint("TOPLEFT", p.bar, "BOTTOMLEFT", 0, -T.GAP)
 
   p.details = UI.Details(p)
   p.details:SetPoint("TOPLEFT", p.heads, "TOPRIGHT", T.PAD, 0)
@@ -83,6 +82,7 @@ local function Refresh(p)
   p.checkAll:SetEnabled(open and not ns.ScanBusy(true))
   p.checkAll:SetLabel(ns.ScanBusy(true) and "Scanning..." or "Check all writs")
   p.details:SetRule(Selected())
+  p.bar:Refresh(Selected())
 end
 
 UI.AddTab("writs", Build, Refresh)

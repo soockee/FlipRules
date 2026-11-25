@@ -88,11 +88,15 @@ local function Build(p)
       row.cells.perDay:SetText(e.perDay and (e.perDay >= 10 and "%.0f" or "%.1f"):format(e.perDay) .. (e.paceOwn and "*" or "") or "-")
       row.cells.profitDay:SetText(ns.Money(e.profitDay))
     end,
-    onClick = function(e) UI.DB().lwSel, UI.DB().lastSel = e.rule.name, e.rule.name; UI.Refresh() end,
+    onClick = function(e) UI.DB().lwSel, UI.DB().lastSel = e.rule.name, e.rule.name; UI.Refresh(); ns.ShopReagents(e.rule) end,
     onEnter = function(row, e) ns.ShowBreakdown(row, e) end,
   })
+  p.bar, p.queue = UI.Actions(p, "lw")
+  p.bar:SetPoint("BOTTOMLEFT", 0, 20)
+  p.bar:SetWidth(COLS.width + 8)
+  p.queue:SetPoint("BOTTOMLEFT", p.bar, "TOPLEFT", 0, T.GAP)
   p.list:SetPoint("TOPLEFT", p.heads, "BOTTOMLEFT", 0, 0)
-  p.list:SetPoint("BOTTOMLEFT", 0, 20)
+  p.list:SetPoint("BOTTOMLEFT", p.queue, "TOPLEFT", 0, T.GAP)
   p.list:SetWidth(COLS.width + 8)
   p.list:SetSelected(function(e) return e.rule.name == UI.DB().lwSel end)
 
@@ -113,6 +117,7 @@ local function Refresh(p)
   local open = ns.AHOpen()
   p.check:SetEnabled(open and Selected() ~= nil)
   p.details:SetRule(Selected())
+  p.bar:Refresh(Selected())
   p.checkAll:SetEnabled(open and not ns.ScanBusy(true))
   p.checkAll:SetLabel(ns.ScanBusy(true) and "Scanning..." or "Check all")
   local lw = FlipRulesDB.lw

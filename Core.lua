@@ -9,7 +9,6 @@ local LAST_BAG = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4
 
 local AH_CUT = 0.05
 local MIN_OBSERVED = 30 -- opens before your own drop counts replace uniform odds
-local MAX_ROWS = 25     -- shortcut: no scrolling, only the top 25 rules show; add a ScrollFrame if lists grow
 
 ns.rules, ns.craft = {}, {}
 
@@ -677,68 +676,6 @@ function ns.Verdict(e)
   if #why == 0 then return "YES", "|cff40ff40", { "makes money and every check passes" } end
   return "RISKY", "|cffffd100", why
 end
-
--- The list filter: "all", "writs" (rules you open), or a rule group such as "Leatherworking".
--- The Leatherworking tab shows the writ-linked craft flips, or all of them (FlipRulesDB.lwView).
-local function LWAll() return FlipRulesDB and FlipRulesDB.lwView == "all" end
-local function OnLW() return FlipRulesDB and FlipRulesDB.filter == "Leatherworking" end
-local function ByDay() return OnLW() and FlipRulesDB.lwSort ~= "profit" end
-
-local function Shown(r)
-  local f = FlipRulesDB and FlipRulesDB.filter or "all"
-  if f == "all" then return true end
-  if f == "writs" then return r.use ~= nil end
-  if f == "Leatherworking" and r.group == f then return LWAll() or r.writ ~= nil end
-  return r.group == f
-end
-
-local function Results()
-  local list = {}
-  for _, r in ipairs(ns.rules) do if Shown(r) then list[#list + 1] = Evaluated(r) end end
-  for _, r in ipairs(ns.craft) do if Shown(r) then list[#list + 1] = Evaluated(r) end end
-  local key = ByDay() and "profitDay" or "profit"
-  table.sort(list, function(a, b) return (a[key] or -math.huge) > (b[key] or -math.huge) end)
-  return list
-end
-
----------------------------------------------------------------- the window: rules | drop stats | verdict graph
-
-local W, H = 1040, 664
-local LX, LW = 12, 500   -- left column: rules list on top, drop statistics below
-local RX, VW = 542, 470  -- right column: verdict graph of the selected rule
-local N_ROWS = 13        -- visible rows; the mouse wheel scrolls the rest
-
-local selected   -- the rule shown in the stats and the verdict graph
-local listOffset = 0
-
-local frame = CreateFrame("Frame", "FlipRulesFrame", UIParent, "BasicFrameTemplateWithInset")
-frame:SetSize(W, H)
-frame:SetPoint("CENTER")
-frame:SetMovable(true)
-frame:EnableMouse(true)
-frame:RegisterForDrag("LeftButton")
-frame:SetScript("OnDragStart", frame.StartMoving)
-frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-frame:Hide()
-tinsert(UISpecialFrames, "FlipRulesFrame")
-frame.TitleText:SetText("FlipRules")
-
-local divider = frame:CreateTexture(nil, "ARTWORK")
-divider:SetColorTexture(1, 1, 1, 0.12)
-divider:SetPoint("TOPLEFT", RX - 16, -28)
-divider:SetPoint("BOTTOMLEFT", RX - 16, 8)
-divider:SetWidth(1)
-
-local function Text(y, font, x, w)
-  local fs = frame:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
-  fs:SetPoint("TOPLEFT", x or RX, y)
-  if w then fs:SetWidth(w); fs:SetWordWrap(false) end
-  fs:SetJustifyH("LEFT")
-  return fs
-end
-
----------------------------------------------------------------- left top: rules list
-
 local function ShowBreakdown(row, e)
   local r, price = e.rule, PriceFor(e.rule)
   GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
@@ -753,72 +690,15 @@ local function ShowBreakdown(row, e)
   GameTooltip:AddDoubleLine("Value after 5% AH cut", Money(e.value))
   GameTooltip:AddDoubleLine("Profit per run (sell at " .. Basis() .. ")", Money(e.profit))
   if e.unpriced > 0 then GameTooltip:AddLine(e.unpriced .. " output(s) have no price, counted as 0", 1, 0.4, 0.4) end
-  GameTooltip:AddLine("Click: show verdict and statistics", 0.4, 1, 0.4)
+  GameTooltip:AddLine("Click: show the details", 0.4, 1, 0.4)
   if not r.use and Auctionator then GameTooltip:AddLine("At the auction house, the click also searches the reagents in Auctionator", 0.4, 1, 0.4) end
   if AHledgerAPI then GameTooltip:AddLine(AHledgerAPI.CREDIT, 0.5, 0.5, 0.5) end
   GameTooltip:Show()
 end
 ns.ShowBreakdown = ShowBreakdown
 
-local COLS = { { "Rule", 0, 240, "LEFT" }, { "Cost", 245, 80, "RIGHT" }, { "Value", 330, 80, "RIGHT" }, { "Profit", 415, 85, "RIGHT" } }
-local colHeads = {}
-for i, c in ipairs(COLS) do
-  local h = Text(-30, "GameFontNormalSmall", LX + c[2], c[3])
-  h:SetJustifyH(c[4]); h:SetText(c[1])
-  colHeads[i] = h
-end
-
 local RefreshAll
 function ns.RefreshAll() RefreshAll() end
-
--- mouse wheel over the list scrolls it (rows don't take the wheel, so it reaches this frame)
-local listArea = CreateFrame("Frame", nil, frame)
-listArea:SetPoint("TOPLEFT", LX, -46)
-listArea:SetSize(LW, N_ROWS * 18)
-listArea:EnableMouseWheel(true)
-listArea:SetScript("OnMouseWheel", function(_, delta) listOffset = listOffset - delta * 3; RefreshAll() end)
-
--- list filter, in the title bar
-local FILTERS = { { "all", "All" }, { "writs", "Writs" }, { "Leatherworking", "Leatherworking" } }
-local filterBtns, fprev = {}, nil
-for _, f in ipairs(FILTERS) do
-  local b = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  b:SetSize(f[1] == "Leatherworking" and 100 or 56, 18)
-  if fprev then b:SetPoint("LEFT", fprev, "RIGHT", 2, 0) else b:SetPoint("TOPLEFT", 8, -2) end
-  b:SetText(f[2])
-  b:SetScript("OnClick", function() FlipRulesDB.filter = f[1]; listOffset = 0; selected = nil; RefreshAll() end)
-  filterBtns[f[1]] = b
-  fprev = b
-end
-
--- Leatherworking tab: writ-linked craft flips or all of them, next to the filter
-local viewBtns = {}
-for _, v in ipairs({ { "writ", "Writ-linked" }, { "all", "All crafts" } }) do
-  local b = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  b:SetSize(80, 18)
-  b:SetPoint("LEFT", fprev, "RIGHT", fprev == filterBtns.Leatherworking and 10 or 2, 0)
-  b:SetText(v[2])
-  b:SetScript("OnClick", function() FlipRulesDB.lwView = v[1]; listOffset = 0; selected = nil; RefreshAll() end)
-  b:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-    GameTooltip:AddLine(v[2])
-    GameTooltip:AddLine(v[1] == "writ" and "Only crafts a Craftsman's Writ asks for." or
-      "Every recipe your crafter has learned, except products that bind when picked up.", 1, 1, 1, true)
-    GameTooltip:Show()
-  end)
-  b:SetScript("OnLeave", GameTooltip_Hide)
-  viewBtns[v[1]] = b
-  fprev = b
-end
-
--- Leatherworking tab: click Profit/day or Profit to sort by it
-for i, key in pairs({ [3] = "day", [4] = "profit" }) do
-  local b = CreateFrame("Button", nil, frame)
-  b:SetAllPoints(colHeads[i])
-  b:SetScript("OnClick", function()
-    if OnLW() then FlipRulesDB.lwSort = key; listOffset = 0; RefreshAll() end
-  end)
-end
 
 -- What you actually buy for `qty` of `id`, following the cheapest path down the production chain:
 -- want[id] = amount. Pure given the cost function.
@@ -878,98 +758,13 @@ local function ShopReagents(r, tries)
   end
 end
 
-local rows = {}
-for i = 1, N_ROWS do
-  local b = CreateFrame("Button", nil, frame)
-  b:SetSize(LW, 18)
-  b:SetPoint("TOPLEFT", LX, -46 - (i - 1) * 18)
-  b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-  b.sel = b:CreateTexture(nil, "BACKGROUND")
-  b.sel:SetAllPoints()
-  b.sel:SetColorTexture(1, 0.82, 0, 0.18)
-  b.cols = {}
-  for k, c in ipairs(COLS) do
-    local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    fs:SetPoint("LEFT", c[2], 0)
-    fs:SetWidth(c[3]); fs:SetJustifyH(c[4]); fs:SetWordWrap(false)
-    b.cols[k] = fs
-  end
-  b:SetScript("OnEnter", function(self) if self.entry then ShowBreakdown(self, self.entry) end end)
-  b:SetScript("OnLeave", GameTooltip_Hide)
-  b:SetScript("OnClick", function(self)
-    if not self.entry then return end
-    selected = self.entry.rule
-    RefreshAll()
-    ShopReagents(selected)
-  end)
-  rows[i] = b
-end
-
-local status = Text(-46 - N_ROWS * 18 - 4, "GameFontDisableSmall", LX, LW)
-
----------------------------------------------------------------- left bottom: drop statistics
-
-local STATS_Y = -46 - N_ROWS * 18 - 28
-
-local openBtn = CreateFrame("Button", "FlipRulesOpenButton", frame, "SecureActionButtonTemplate,UIPanelButtonTemplate")
-openBtn:SetSize(230, 22)
-openBtn:SetPoint("TOPLEFT", LX, STATS_Y)
-openBtn:RegisterForClicks("AnyUp", "AnyDown")
+-- Reset a writ flip's drop statistics; the confirm box gets the flip's name.
 StaticPopupDialogs.FLIPRULES_RESET = {
   text = "Clear all drop statistics for\n%s?",
   button1 = YES, button2 = NO,
-  OnAccept = function()
-    if selected then FlipRulesDB.stats[selected.name] = nil end
-    RefreshAll()
-  end,
+  OnAccept = function(_, name) FlipRulesDB.stats[name] = nil; RefreshAll() end,
   timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
-local resetBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-resetBtn:SetSize(110, 22)
-resetBtn:SetPoint("LEFT", openBtn, "RIGHT", 8, 0)
-resetBtn:SetText("Reset stats")
-resetBtn:SetScript("OnClick", function() if selected then StaticPopup_Show("FLIPRULES_RESET", selected.name) end end)
-
--- craft rules: how many crafts one placed station serves, which splits its cost
-local perLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-perLabel:SetPoint("TOPLEFT", LX, STATS_Y - 5)
-perLabel:SetText("Crafts per station:")
-local perBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
-perBox:SetSize(50, 20)
-perBox:SetPoint("LEFT", perLabel, "RIGHT", 10, 0)
-perBox:SetAutoFocus(false)
-perBox:SetNumeric(true)
-perBox:SetScript("OnEnterPressed", function(self)
-  FlipRulesDB.craftsPerStation = math.max(1, tonumber(self:GetText()) or 10)
-  self:ClearFocus()
-  RefreshAll()
-end)
-perBox:SetScript("OnEscapePressed", function(self) self:ClearFocus(); RefreshAll() end)
-perBox:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Crafts per station")
-  GameTooltip:AddLine("Placing a camp station uses it up. Its cost is split over this many crafts. "
-    .. "Same number for all tiers; press Enter to apply.", 1, 1, 1, true)
-  GameTooltip:Show()
-end)
-perBox:SetScript("OnLeave", GameTooltip_Hide)
-
--- whether the Auctionator shopping list includes the station; the cost always carries its share
-local shopStation = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-shopStation:SetSize(22, 22)
-shopStation:SetPoint("LEFT", perBox, "RIGHT", 10, 0)
-shopStation.label = shopStation:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-shopStation.label:SetPoint("LEFT", shopStation, "RIGHT", 0, 0)
-shopStation.label:SetText("Shop for station")
-shopStation:SetScript("OnClick", function(self) FlipRulesDB.shopStation = self:GetChecked() and true or false end)
-shopStation:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Shop for station")
-  GameTooltip:AddLine("Ticked: clicking an item at the auction house also searches the station (or what crafting it takes) in Auctionator. "
-    .. "Leave it off when you already have one. Either way its share stays in the cost, split over the crafts per station.", 1, 1, 1, true)
-  GameTooltip:Show()
-end)
-shopStation:SetScript("OnLeave", GameTooltip_Hide)
 
 ---------------------------------------------------------------- selling: one auction per click
 
@@ -981,7 +776,7 @@ local DURATION_NAME = { "short", "medium", "long" }
 local POST_WAIT = 5     -- seconds to wait for the AH to confirm a post
 local POST_FRESH = 60   -- re-check an item's price before posting when the last check is older
 local SEARCH_WAIT = 5   -- seconds before giving up on a search answer
-local ahOpen, posting, postQueue = false, nil, {}
+local ahOpen, posting = false, nil
 function ns.AHOpen() return ahOpen end
 
 -- Live price checks, one search at a time, the next when the AH says it's ready again.
@@ -1193,7 +988,8 @@ local function PostQueue(r)
     local n = bags[id] or 0
     if n > 0 then
       local row = AHRow(id)
-      q[#q + 1] = { id = id, n = n, cur = row and row.minBuyout, price = ns.PostPrice(row and row.minBuyout, price(id, false), row and row.liveOwn) }
+      q[#q + 1] = { id = id, n = n, cur = row and row.minBuyout, price = ns.PostPrice(row and row.minBuyout, price(id, false), row and row.liveOwn),
+        lw = r.group == "Leatherworking" }
     end
   end
   -- most valuable first; unpriced ones last (shown, never posted)
@@ -1201,8 +997,8 @@ local function PostQueue(r)
   return q
 end
 
-local function NextPost()
-  for _, it in ipairs(postQueue) do if it.price then return it end end
+local function NextPost(q)
+  for _, it in ipairs(q) do if it.price then return it end end
 end
 
 local function FindSlot(id)
@@ -1255,7 +1051,7 @@ local function Post(item)
   local bag, slot, stack = FindSlot(item.id)
   if not bag then return end
   local p = { id = item.id, price = item.price, loc = ItemLocation:CreateFromBagAndSlot(bag, slot),
-    duration = selected and selected.group == "Leatherworking" and POST_DURATION_LW or POST_DURATION }
+    duration = item.lw and POST_DURATION_LW or POST_DURATION }
   if AH.GetItemCommodityStatus and AH.PostCommodity then
     local ok, s = pcall(AH.GetItemCommodityStatus, p.loc)
     p.commodity = ok and s == (Enum and Enum.ItemCommodityStatus and Enum.ItemCommodityStatus.Commodity or 2)
@@ -1288,23 +1084,6 @@ StaticPopupDialogs.FLIPRULES_POST_CONFIRM = {
   timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
-local postBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-postBtn:SetSize(140, 22)
-postBtn:SetPoint("LEFT", resetBtn, "RIGHT", 8, 0)
-postBtn:SetScript("OnClick", function() local it = NextPost() if it then Post(it) end end)
-postBtn:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Post results on the auction house")
-  GameTooltip:AddLine("One click posts one auction. Click again for the next.", 1, 1, 1, true)
-  GameTooltip:AddLine("Price: cheapest listing minus 1 copper, checked live right before each post (your own auctions left out).", 0.7, 0.7, 0.7, true)
-  GameTooltip:AddLine("The list below shows what goes up next, at which price.", 0.7, 0.7, 0.7, true)
-  GameTooltip:AddLine(selected and selected.group == "Leatherworking"
-    and "Duration: short (2 h). Leatherworking is undercut fast, so a short post loses less deposit."
-    or "Duration: long (writs).", 0.7, 0.7, 0.7, true)
-  GameTooltip:Show()
-end)
-postBtn:SetScript("OnLeave", GameTooltip_Hide)
-
 ---------------------------------------------------------------- mailing: writs to your selling character
 
 -- One click = one mail of up to 12 stacks. Sends every item a rule can drop (the opened writs);
@@ -1325,15 +1104,11 @@ local MAIL_CHARS = "Milchiger Abgang, Wealth Peon"
 ns.MAIL_CHARS = MAIL_CHARS
 local function MailTo() return ns.MailTarget(FlipRulesDB.mailChars or MAIL_CHARS, UnitName("player")) end
 
--- What the mail button sends: Leatherworking tab (or a leatherworking rule selected) = every
--- leatherworking item, reagents and crafted products; anywhere else = the opened writs.
-local function MailWhat()
-  return (FlipRulesDB.filter == "Leatherworking" or selected and selected.group == "Leatherworking")
-    and "LW items" or "writs"
-end
-local function MailIDs()
+-- What a mail sends: kind "writs" = the opened writs; "LW items" = every leatherworking item,
+-- reagents and crafted products.
+local function MailIDs(kind)
   local ids = {}
-  if MailWhat() == "writs" then
+  if kind == "writs" then
     for _, r in ipairs(ns.rules) do for _, id in ipairs(r.pool or {}) do ids[id] = true end end
     return ids
   end
@@ -1350,8 +1125,8 @@ local function MailIDs()
   return ids
 end
 
-local function MailSlots()
-  local ids, slots = MailIDs(), {}
+local function MailSlots(kind)
+  local ids, slots = MailIDs(kind), {}
   for bag = 0, LAST_BAG do
     for slot = 1, (NumSlots(bag) or 0) do
       local info = SlotInfo(bag, slot)
@@ -1363,7 +1138,7 @@ local function MailSlots()
   return slots
 end
 
-local function SendBatch()
+local function SendBatch(kind)
   local to = MailTo()
   if not mailOpen then return Say("open a mailbox first.") end
   if mailing then return Say("still sending the last mail, click again in a moment.") end
@@ -1372,9 +1147,8 @@ local function SendBatch()
     if GetSendMailItem(i) then return Say("the Send Mail tab already has attachments: clear them first.") end
   end
   if MailFrameTab_OnClick then MailFrameTab_OnClick(nil, 2) end -- attaching needs the Send Mail tab
-  local slots = MailSlots()
+  local slots = MailSlots(kind)
   local n = math.min(MAIL_MAX, #slots)
-  local kind = MailWhat()
   if n == 0 then return Say(("no %s in your bags."):format(kind)) end
   for i = 1, n do
     ClearCursor()
@@ -1399,41 +1173,9 @@ local function FillSendMail()
   end
 end
 
-local mailBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-mailBtn:SetSize(140, 22)
-mailBtn:SetPoint("LEFT", resetBtn, "RIGHT", 8, 0)
-mailBtn:SetScript("OnClick", SendBatch)
-mailBtn:SetScript("OnEnter", function(self)
-  local stacks = #MailSlots()
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine(("Mail %s to %s"):format(MailWhat(), MailTo()))
-  GameTooltip:AddLine(("One click sends one mail of up to %d stacks. %d stacks in your bags: %d mails."):format(
-    MAIL_MAX, stacks, math.ceil(stacks / MAIL_MAX)), 1, 1, 1, true)
-  GameTooltip:AddLine(MailWhat() == "writs"
-    and "Every Craftsman's Writ the rules know is sent; sealed writs stay. On the Leatherworking tab this sends leatherworking items instead."
-    or "Every leatherworking item is sent: leather, hides, thread, salt, dyes, the stations, and the items the rules craft.",
-    0.7, 0.7, 0.7, true)
-  local counts, order = {}, {}
-  for _, s in ipairs(MailSlots()) do
-    local info = SlotInfo(s.bag, s.slot)
-    if type(info) == "table" then
-      if not counts[info.itemID] then order[#order + 1] = info.itemID end
-      counts[info.itemID] = (counts[info.itemID] or 0) + (info.stackCount or 1)
-    end
-  end
-  for i, id in ipairs(order) do
-    if i > 15 then GameTooltip:AddLine(("... and %d more"):format(#order - 15)) break end
-    GameTooltip:AddDoubleLine(Name(id), "x" .. counts[id], 1, 1, 1, 1, 1, 1)
-  end
-  GameTooltip:AddLine("Postage applies per mail. Your characters are set in the 'Mail between' box at the bottom.", 0.7, 0.7, 0.7, true)
-  GameTooltip:Show()
-end)
-mailBtn:SetScript("OnLeave", GameTooltip_Hide)
-mailBtn:Hide()
-
 ---------------------------------------------------------------- deleting writs worth less than 1 silver
 
-local delBtn, CheapSlots
+local CheapSlots
 do
 local CHEAP = 100 -- copper: opened writs whose live price is below this are deleted
 local CHEAP_AGE = 24 * 3600 -- your own live check counts this long; AHledger's table is never used here
@@ -1465,42 +1207,46 @@ CheapSlots = function()
   return list
 end
 
-local function Ago(t)
+function ns.Ago(t)
   local m = math.floor((time() - t) / 60)
   return m < 60 and ("%dm ago"):format(m) or ("%dh ago"):format(math.floor(m / 60))
 end
 
-delBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-delBtn:SetSize(140, 22)
-delBtn:SetPoint("LEFT", resetBtn, "RIGHT", 8, 0)
-delBtn:SetScript("OnClick", function() -- one stack per click, the one named in the tooltip
+-- One click deletes one stack: the first of CheapSlots().
+function ns.DeleteCheap()
   local it = CheapSlots()[1]
   if not it then return end
   ClearCursor()
   Pickup(it.bag, it.slot)
   if CursorHasItem() then
     DeleteCursorItem()
-    Say(("deleted %s x%d (cheapest listing %s, checked %s)"):format(it.link or it.id, it.n, Money(it.price), Ago(it.t)))
+    Say(("deleted %s x%d (cheapest listing %s, checked %s)"):format(it.link or it.id, it.n, Money(it.price), ns.Ago(it.t)))
   end
   ClearCursor()
-end)
-delBtn:SetScript("OnEnter", function(self)
-  local list = CheapSlots()
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Delete writs worth less than " .. Money(CHEAP))
-  GameTooltip:AddLine("One click deletes one stack, the first below. This can't be undone.", 1, 0.3, 0.3, true)
-  GameTooltip:AddLine("Price = the cheapest listing from your own Check prices in the last 24 hours "
-    .. "(not AHledger). Writs you haven't checked are kept.", 0.7, 0.7, 0.7, true)
-  for i, it in ipairs(list) do
-    if i > 15 then GameTooltip:AddLine(("... and %d more"):format(#list - 15)) break end
-    GameTooltip:AddDoubleLine(("%s x%d"):format(it.link or it.id, it.n),
-      ("%s  (%s)"):format(Money(it.price), Ago(it.t)), 1, 1, 1, 1, 1, 1)
-  end
-  GameTooltip:Show()
-end)
-delBtn:SetScript("OnLeave", GameTooltip_Hide)
-delBtn:Hide()
 end
+
+end
+
+---------------------------------------------------------------- what the window's action bar uses
+
+ns.BagCounts, ns.Live, ns.ShopReagents, ns.CHEAP = BagCounts, Live, ShopReagents, 100
+function ns.MailOpen() return mailOpen end
+function ns.Mailing() return mailing ~= nil end
+ns.MailTo, ns.MailSlots, ns.SendBatch, ns.CheapSlots, ns.MAIL_MAX = MailTo, MailSlots, SendBatch, CheapSlots, MAIL_MAX
+
+-- What posting `r` looks like now: its results in your bags, best first (queue), the next one to
+-- post (head) and whether its price is fresh. Looks the next one up when it isn't, at most once a
+-- minute so an unanswered search doesn't loop.
+function ns.PostState(r)
+  local q = ahOpen and r and PostQueue(r) or {}
+  local items = 0
+  for _, it in ipairs(q) do if it.price then items = items + it.n end end
+  local head = NextPost(q)
+  local fresh = head and Live(head.id, POST_FRESH) and true or false
+  if head and not fresh and GetTime() - (tried[head.id] or -POST_FRESH) >= POST_FRESH then Check({ head.id }) end
+  return { queue = q, items = items, head = head, fresh = fresh, busy = posting ~= nil }
+end
+function ns.PostNext(r) local head = NextPost(ahOpen and r and PostQueue(r) or {}) if head then Post(head) end end
 
 ---------------------------------------------------------------- earnings: auction mail you take
 
@@ -1797,291 +1543,8 @@ ns.ImportAHledger = function()
   end
 end
 end
-
--- Your own record of an item: how your posts ended and the cheapest listing by day.
-local function RecordLines(id, L, pad)
-  local t = FlipRulesDB.track and FlipRulesDB.track[id]
-  local s = ns.TrackSummary(t)
-  if s then
-    L[#L + 1] = ("%sPosted %d: |cff40ff40sold %d|r, |cffff6060expired %d|r, cancelled %d, %d still up"):format(
-      pad, t.posted, t.sold, t.expired, t.cancelled, s.open)
-    if s.through then
-      L[#L + 1] = ("%s%s%.0f%%|r of ended posts sold%s"):format(pad, s.through >= 0.6 and "|cff40ff40" or "|cffff6060",
-        100 * s.through, s.hours and (", after %.0f h on average"):format(s.hours) or "")
-    end
-    if s.each then
-      L[#L + 1] = ("%sYou got %s each after the cut%s%s"):format(pad, Money(s.each),
-        s.ofList and (" |cff999999(%.0f%% of your list price)|r"):format(100 * s.ofList) or "",
-        s.profit and ("; profit %s per sold craft"):format(Money(s.profit)) or "")
-    end
-  else
-    L[#L + 1] = pad .. "|cff999999No posts recorded yet: counted from now on, ended by the auction mail you take.|r"
-  end
-  local h = FlipRulesDB.hist and FlipRulesDB.hist[id]
-  if h then
-    local byDay, days = {}, {}
-    local slots = {}
-    for k in pairs(h) do slots[#slots + 1] = k end
-    table.sort(slots)
-    for _, k in ipairs(slots) do -- the day's low, and the count of its last point
-      local x, dk = h[k], date("%m-%d", k * 3600)
-      local d = byDay[dk]
-      if not d then d = {}; byDay[dk] = d; days[#days + 1] = dk end
-      if (x.lo or x.min) and (not d.lo or (x.lo or x.min) < d.lo) then d.lo = x.lo or x.min end
-      d.n = x.n
-    end
-    local parts = {}
-    for i = math.max(1, #days - 6), #days do
-      local x = byDay[days[i]]
-      parts[#parts + 1] = ("%s %s |cff999999(%d)|r"):format(days[i], Money(x.lo), x.n or 0)
-    end
-    L[#L + 1] = pad .. "Cheapest listing by day (listed): " .. table.concat(parts, ",  ")
-    local tr = {}
-    for _, k in ipairs(slots) do
-      local x = h[k]
-      if x.pd or x.md then tr[#tr + 1] = ("%s %s, %s/day"):format(date("%m-%d", k * 3600), Money(x.md), x.pd and ("%.1f"):format(x.pd) or "?") end
-    end
-    for i = 1, #tr - 5 do table.remove(tr, 1) end
-    if #tr > 0 then L[#L + 1] = pad .. "AHledger median, sold/day by update: " .. table.concat(tr, ",  ") end
-  end
-end
-
--- Sell list: replaces the drop statistics while the auction house is open, so you can check every
--- price before it goes up. Hover the icon for the item and where its prices come from.
-local SELL_ROWS, SELL_H = 11, 22
-local sellArea = CreateFrame("Frame", nil, frame)
-sellArea:SetPoint("TOPLEFT", frame, "TOPLEFT", LX, STATS_Y - 30)
-sellArea:SetPoint("BOTTOMRIGHT", frame, "BOTTOMLEFT", LX + LW, 40)
-sellArea:EnableMouseWheel(true)
-local sellOffset = 0
-local SELL_COLS = { { "Item", 24, 236, "LEFT" }, { "Qty", 262, 34, "RIGHT" }, { "Cheapest now", 300, 95, "RIGHT" }, { "You list at", 400, 95, "RIGHT" } }
-for _, c in ipairs(SELL_COLS) do
-  local h = sellArea:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  h:SetPoint("TOPLEFT", c[2], 0)
-  h:SetWidth(c[3])
-  h:SetJustifyH(c[4])
-  h:SetText(c[1])
-end
-local sellEmpty = sellArea:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-sellEmpty:SetPoint("TOPLEFT", 0, -22)
-sellEmpty:SetText("None of this rule's results are in your bags.")
-
-local function SellTooltip(self)
-  local it = self.item
-  if not it then return end
-  GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-  GameTooltip:SetItemByID(it.id)
-  GameTooltip:AddLine(" ")
-  local l, r = Live(it.id), AHledgerAPI and AHledgerAPI.GetPrice(it.id)
-  if l then
-    GameTooltip:AddDoubleLine("Cheapest now (live)", l.min and Money(l.min) or "none listed", 1, 0.82, 0, 1, 1, 1)
-    local top = {}
-    for i, p in ipairs(l.top or {}) do top[i] = Money(p) end
-    local many = (l.variants or 0) > 1
-    if #top > 0 then
-      GameTooltip:AddLine((many and ("Cheapest per variant (%d variants, any one counts): ") or "Cheapest auctions: "):format(l.variants)
-        .. table.concat(top, ", "), 0.8, 0.8, 0.8, true)
-    end
-    GameTooltip:AddLine(("%d listed by others, checked %d s ago"):format(l.n or 0, time() - l.t), 0.6, 0.6, 0.6)
-  else
-    GameTooltip:AddLine("Not checked live yet: prices are AHledger's.", 1, 0.5, 0.25)
-  end
-  if r then
-    GameTooltip:AddDoubleLine("AHledger lowest", Money(r.minBuyout), 0.8, 0.8, 0.8, 1, 1, 1)
-    GameTooltip:AddDoubleLine("AHledger median today / 7d", Money(r.median) .. " / " .. Money(r.median7d), 0.8, 0.8, 0.8, 1, 1, 1)
-  end
-  GameTooltip:AddDoubleLine("You list at", it.price and Money(it.price) or "not posted (no price)", 0.2, 1, 0.6, 1, 1, 1)
-  local rec = {}
-  RecordLines(it.id, rec, "")
-  GameTooltip:AddLine("Your record", 1, 0.82, 0)
-  for _, line in ipairs(rec) do GameTooltip:AddLine(line, 1, 1, 1, true) end
-  GameTooltip:AddLine(AHledgerAPI and AHledgerAPI.CREDIT or "", 0.5, 0.5, 0.5)
-  GameTooltip:Show()
-end
-
-local sellRows = {}
-for i = 1, SELL_ROWS do
-  local row = CreateFrame("Frame", nil, sellArea)
-  row:SetSize(LW, SELL_H)
-  row:SetPoint("TOPLEFT", 0, -16 - (i - 1) * SELL_H)
-  row.next = row:CreateTexture(nil, "BACKGROUND")
-  row.next:SetAllPoints()
-  row.next:SetColorTexture(1, 0.82, 0, 0.15)
-  row.icon = CreateFrame("Button", nil, row)
-  row.icon:SetSize(20, 20)
-  row.icon:SetPoint("LEFT", 0, 0)
-  row.icon.tex = row.icon:CreateTexture(nil, "ARTWORK")
-  row.icon.tex:SetAllPoints()
-  row.icon:SetScript("OnEnter", SellTooltip)
-  row.icon:SetScript("OnLeave", GameTooltip_Hide)
-  row.cols = {}
-  for c, col in ipairs(SELL_COLS) do
-    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    fs:SetPoint("LEFT", col[2], 0)
-    fs:SetWidth(col[3])
-    fs:SetJustifyH(col[4])
-    fs:SetWordWrap(false)
-    row.cols[c] = fs
-  end
-  sellRows[i] = row
-end
-
-local function RefreshSell()
-  sellOffset = math.max(0, math.min(sellOffset, #postQueue - SELL_ROWS))
-  local nxt = NextPost()
-  sellEmpty:SetShown(#postQueue == 0)
-  for i, row in ipairs(sellRows) do
-    local it = postQueue[sellOffset + i]
-    row.item = it
-    row.icon.item = it
-    if it then
-      row.icon.tex:SetTexture(((C_Item and C_Item.GetItemIconByID) or GetItemIcon)(it.id))
-      row.cols[1]:SetText(Link(it.id))
-      row.cols[2]:SetText(it.n)
-      local live = Live(it.id)
-      row.cols[3]:SetText(live and (live.min and Money(live.min) or "none") or ("|cff999999%s ?|r"):format(it.cur and Money(it.cur) or ""))
-      row.cols[4]:SetText(it.price and Money(it.price) or "|cff999999-|r")
-      row.next:SetShown(it == nxt)
-      row:Show()
-    else
-      row:Hide()
-    end
-  end
-end
-sellArea:SetScript("OnMouseWheel", function(_, delta) sellOffset = sellOffset - delta * 3; RefreshSell() end)
-
-local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LX, STATS_Y - 30)
-scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMLEFT", LX + LW - 22, 40)
-local child = CreateFrame("Frame", nil, scroll)
-child:SetSize(LW - 30, 1)
-scroll:SetScrollChild(child)
-local body = child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-body:SetPoint("TOPLEFT")
-body:SetWidth(LW - 30)
-body:SetJustifyH("LEFT")
-body:SetSpacing(2)
-
 -- 95% margin of error for a share p seen in n tries (normal approximation).
 local function Margin(p, n) return n > 0 and 1.96 * math.sqrt(p * (1 - p) / n) or 0 end
-
--- Production cost table for a craft rule: each reagent, the station share, and what it sells for.
-local HOW = { vendor = "|cff80c0ffvendor|r", AH = "|cffffd100AH|r", craft = "|cff40ff40craft|r" }
-local function Qty(q) return q == math.floor(q) and ("x%d"):format(q) or ("x%.2f"):format(q) end
-
--- One line per item of the production chain, indented by depth; an item you can make lists what
--- making it takes below it, greyed out when buying it is the cheaper way.
-local function ChainLines(L, id, qty, depth, dim)
-  local c, how, buy, craft = Cost(id)
-  local alt = craft and how ~= "craft" and ("  |cff999999craft %s|r"):format(Money(craft))
-    or how == "craft" and buy and ("  |cff999999AH %s|r"):format(Money(buy)) or ""
-  local line = ("%s%s %s  %s  %s  %s%s"):format(("    "):rep(depth), Link(id), Qty(qty), HOW[how] or "|cffff4040no price|r",
-    Money(c), Money(c and c * qty), alt)
-  L[#L + 1] = dim and ("|cff777777" .. line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") .. "|r") or line
-  local rec = depth < 8 and ns.recipes[id]
-  if rec then
-    for rid, n in pairs(rec.reagents) do ChainLines(L, rid, qty * n / rec.makes, depth + 1, dim or how ~= "craft") end
-  end
-end
-
-local function CraftText(r)
-  local e, price = Evaluated(r), PriceFor(r)
-  local L = {}
-  if r.writ then
-    L[#L + 1] = ("Asked for by %s |cff999999(%s writ%s)|r\n"):format(Link(r.writ), r.tier or "?",
-      r.spec and (", needs " .. r.spec .. " Leatherworking") or "")
-  end
-  L[#L + 1] = "|cffffd100Production chain|r   qty   how   each   total"
-  for id, n in pairs(r.inputs) do ChainLines(L, id, n, 1) end
-  if r.station then
-    L[#L + 1] = ("  |cff999999station, shared by %d crafts:|r"):format(CraftsPerStation())
-    ChainLines(L, r.station, 1 / CraftsPerStation(), 1)
-  end
-  L[#L + 1] = ("  |cffffffffTotal per craft|r   %s"):format(Money(e.cost))
-  L[#L + 1] = "\n|cffffd100Selling|r"
-  for id, n in pairs(r.outputs) do
-    local pd = PerDay(id)
-    L[#L + 1] = ("  %s x%d at %s (%s)   |cff999999%s sold/day|r"):format(Link(id), n, Money(price(id, false)), Basis(),
-      pd and ("%.0f"):format(pd) or "?")
-    local l = Live(id)
-    if l and (l.variants or 0) > 1 then
-      L[#L + 1] = ("  |cff999999%d variants on the AH (any one counts for the writ): cheapest %s|r"):format(l.variants, Money(l.min))
-    elseif not l then
-      L[#L + 1] = "  |cff999999not checked live: Check prices at the AH finds every variant|r"
-    end
-  end
-  L[#L + 1] = ("  After 5%% AH cut   %s"):format(Money(e.value))
-  L[#L + 1] = ("  |cffffffffProfit per craft|r   %s"):format(Money(e.profit))
-  L[#L + 1] = "\n|cffffd100Your record|r"
-  for id in pairs(r.outputs) do RecordLines(id, L, "  ") end
-  L[#L + 1] = "\n|cff999999Vendor items at their vendor price; anything you can make costs the cheaper of the AH "
-    .. "and crafting it (indented: what crafting it takes, grey when buying is cheaper)"
-    .. (r.station and "; the station is shared over the crafts per station set above.|r" or ".|r")
-  return table.concat(L, "\n")
-end
-
-function ns.StatsText(r)
-  if r.inputs and r.outputs and not r.use then return CraftText(r) end
-  if not r.use then return "|cff999999No drop statistics: this rule has no item to open.|r" end
-  local s, price = Stats(r), PriceFor(r)
-  local n = s.opens
-  local L = {}
-  local e = FlipRulesDB.earn and FlipRulesDB.earn[r.name]
-  if e then
-    local net = e.revenue - e.spent
-    L[#L + 1] = ("|cffffd100Earned|r  %s net   |cff999999sold %d for %s (after AH cut), bought %d for %s|r"):format(
-      Money(net), e.sold, Money(e.revenue), e.bought, Money(e.spent))
-  else
-    L[#L + 1] = "|cffffd100Earned|r  |cff999999nothing yet: counted when you take auction mail for this rule|r"
-  end
-  local all = 0
-  for _, x in pairs(FlipRulesDB.earn or {}) do all = all + x.revenue - x.spent end
-  L[#L + 1] = ("|cff999999All rules together: %s net|r\n"):format(Money(all))
-  L[#L + 1] = ("Opened |cffffffff%d|r"):format(n)
-  if n < MIN_OBSERVED then L[#L + 1] = ("|cff999999Profit uses uniform odds until %d opens.|r"):format(MIN_OBSERVED) end
-
-  -- every item that can or did drop
-  local ids, seen = {}, {}
-  for _, id in ipairs(r.pool or {}) do ids[#ids + 1] = id; seen[id] = true end
-  for id in pairs(s.items) do if not seen[id] then ids[#ids + 1] = id end end
-  local poolSize = #(r.pool or {})
-
-  local cats, catPool, value = {}, {}, 0
-  for _, id in ipairs(ids) do
-    local c = Cat(r, id)
-    cats[c] = (cats[c] or 0) + (s.items[id] or 0)
-    if seen[id] then catPool[c] = (catPool[c] or 0) + 1 end
-    value = value + (s.items[id] or 0) * (price(id, false) or 0)
-  end
-  if n > 0 then L[#L + 1] = ("Average value you got per open: %s (before 5%% cut)"):format(Money(value / n)) end
-
-  L[#L + 1] = "\n|cffffd100By category|r   count  share  (uniform would be)"
-  local cl = {}
-  for c in pairs(cats) do cl[#cl + 1] = c end
-  table.sort(cl, function(a, b) return cats[a] > cats[b] or (cats[a] == cats[b] and a < b) end)
-  for _, c in ipairs(cl) do
-    local p = n > 0 and cats[c] / n or 0
-    L[#L + 1] = ("  %-16s %4d   %5.1f%% ±%.1f   (%.1f%%)"):format(c, cats[c], 100 * p, 100 * Margin(p, n),
-      poolSize > 0 and 100 * (catPool[c] or 0) / poolSize or 0)
-  end
-
-  L[#L + 1] = "\n|cffffd100By item|r   count  drop chance  price (" .. Basis() .. ")  sold/day"
-  table.sort(ids, function(a, b)
-    local ca, cb = s.items[a] or 0, s.items[b] or 0
-    if ca ~= cb then return ca > cb end
-    return (price(a, false) or 0) > (price(b, false) or 0)
-  end)
-  for _, id in ipairs(ids) do
-    local k = s.items[id] or 0
-    local p = n > 0 and k / n or 0
-    local pd = PerDay(id)
-    L[#L + 1] = ("  %s |cff999999[%s]|r%s  |cffffffff%d|r  %.1f%% ±%.1f  %s  |cff999999%s|r"):format(Name(id), Cat(r, id),
-      seen[id] and "" or " |cffff4040not in pool|r", k, 100 * p, 100 * Margin(p, n), Money(price(id, false)),
-      pd and ("%.1f"):format(pd) or "?")
-  end
-  return table.concat(L, "\n")
-end
-
 -- The details pane's content as data (UI/Details.lua lays it out): what you buy down the chains,
 -- what you sell, your record, and for a writ flip what opening gave you.
 do
@@ -2174,226 +1637,8 @@ function ns.DetailData(r)
 end
 end
 
-local function RefreshStats()
-  resetBtn:SetShown(selected and selected.use and true or false)
-  local station = selected and selected.station and true or false
-  perLabel:SetShown(station)
-  perBox:SetShown(station)
-  shopStation:SetShown(station)
-  shopStation:SetChecked(FlipRulesDB.shopStation and true or false)
-  if station and not perBox:HasFocus() then perBox:SetText(CraftsPerStation()) end
-  body:SetText(selected and ns.StatsText(selected) or "")
-  child:SetHeight(body:GetStringHeight() + 10)
-  postQueue = ahOpen and selected and PostQueue(selected) or {}
-  local items = 0
-  for _, it in ipairs(postQueue) do if it.price then items = items + it.n end end
-  local selling = ahOpen and selected and true or false
-  postBtn:SetShown(selling)
-  local stacks = mailOpen and #MailSlots() or 0
-  mailBtn:SetShown(mailOpen and not selling)
-  mailBtn:SetEnabled(stacks > 0 and not mailing)
-  mailBtn:SetText(mailing and "Sending..." or stacks > 0 and ("Mail %s (%d)"):format(MailWhat(), stacks)
-    or ("No %s to mail"):format(MailWhat()))
-  local cheap = (not selling and not mailOpen) and #CheapSlots() or 0
-  delBtn:SetShown(cheap > 0)
-  delBtn:SetText(("Delete writs <1s (%d)"):format(cheap))
-  sellArea:SetShown(selling)
-  scroll:SetShown(not selling)
-  if selling then RefreshSell() end
-  local head = NextPost()
-  local fresh = head and Live(head.id, POST_FRESH)
-  -- look the next one up before you click; at most once a minute, so an unanswered search doesn't loop
-  if head and not fresh and GetTime() - (tried[head.id] or -POST_FRESH) >= POST_FRESH then Check({ head.id }) end
-  postBtn:SetEnabled(items > 0 and not posting and (fresh or not searching) and true or false)
-  postBtn:SetText(items == 0 and "Nothing to post" or fresh and ("Post next (%d left)"):format(items)
-    or searching and "Checking price..." or "Check price")
-  if selected and selected.use then
-    openBtn:SetText(("Open %s (%d)"):format(Name(selected.use), BagCounts()[selected.use] or 0))
-  end
-  if InCombatLockdown() then return end -- secure attributes wait for PLAYER_REGEN_ENABLED
-  if selected and selected.use then
-    openBtn:SetAttribute("type", "item")
-    openBtn:SetAttribute("item", "item:" .. selected.use)
-    openBtn:Show()
-  else
-    openBtn:Hide()
-  end
-end
-
----------------------------------------------------------------- right: verdict graph
-
-local RefreshView
-do
--- A horizontal axis with coloured spans and labelled markers.
-local function Axis(y)
-  local a = { spans = {}, marks = {} }
-  a.track = frame:CreateTexture(nil, "ARTWORK")
-  a.track:SetColorTexture(0.15, 0.15, 0.15, 1)
-  a.track:SetPoint("TOPLEFT", RX, y)
-  a.track:SetSize(VW, 12)
-  function a:Scale(lo, hi)
-    if hi <= lo then hi = lo + 1 end
-    local pad = (hi - lo) * 0.08
-    lo, hi = lo - pad, hi + pad
-    self.map = function(v) return (math.max(lo, math.min(hi, v)) - lo) / (hi - lo) * VW end
-    for _, t in pairs(self.spans) do t:Hide() end
-    for _, m in pairs(self.marks) do m.t:Hide(); m.fs:Hide() end
-  end
-  function a:Span(i, from, to, r, g, b, al)
-    if not (from and to) then return end
-    local t = self.spans[i] or frame:CreateTexture(nil, "ARTWORK", nil, i)
-    self.spans[i] = t
-    local x1, x2 = self.map(from), self.map(to)
-    if x2 < x1 then x1, x2 = x2, x1 end
-    t:SetColorTexture(r, g, b, al)
-    t:ClearAllPoints()
-    t:SetPoint("TOPLEFT", self.track, "TOPLEFT", x1, 0)
-    t:SetSize(math.max(2, x2 - x1), 12)
-    t:Show()
-  end
-  function a:Mark(i, v, label, r, g, b, above)
-    if not v then return end
-    local m = self.marks[i] or { t = frame:CreateTexture(nil, "OVERLAY"), fs = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall") }
-    self.marks[i] = m
-    local x = self.map(v)
-    m.t:SetColorTexture(r, g, b, 1)
-    m.t:ClearAllPoints()
-    m.t:SetPoint("TOPLEFT", self.track, "TOPLEFT", x - 1, 4)
-    m.t:SetSize(2, 20)
-    m.fs:ClearAllPoints()
-    if above then m.fs:SetPoint("BOTTOM", self.track, "TOPLEFT", x, 6) else m.fs:SetPoint("TOP", self.track, "TOPLEFT", x, -10) end
-    m.fs:SetText(label)
-    m.fs:SetTextColor(r, g, b)
-    m.t:Show(); m.fs:Show()
-  end
-  return a
-end
-
-local vVerdict = Text(-32, "GameFontNormalHuge")
-local vName = Text(-60, "GameFontHighlight", nil, VW)
-local vWhy = Text(-78, "GameFontDisableSmall", nil, VW)
-
-Text(-104, "GameFontNormal"):SetText("Profit per run")
-local profitAxis = Axis(-138)
-local vProfitNote = Text(-168, nil, nil, VW)
-vProfitNote:SetWordWrap(true)
-
-Text(-192, "GameFontNormal"):SetText("What you pay vs break-even |cff999999(cautious = lower of today's and 7-day median)|r")
-local costAxis = Axis(-226)
-local vCostNote = Text(-252, nil, nil, VW)
-vCostNote:SetWordWrap(true)
-
-Text(-282, "GameFontNormal"):SetText("Checks")
-local checkRows = {}
-for i = 1, 5 do
-  local icon = frame:CreateTexture(nil, "OVERLAY")
-  icon:SetSize(14, 14)
-  icon:SetPoint("TOPLEFT", RX, -300 - (i - 1) * 18)
-  checkRows[i] = { icon = icon, fs = Text(-301 - (i - 1) * 18, nil, RX + 20, VW - 20) }
-end
-
-local DRIVER_Y = -416
-local vDrivers = Text(DRIVER_Y - 18, "GameFontNormal", nil, VW)
-local driverRows = {}
-for i = 1, 8 do
-  local y = DRIVER_Y - (i - 1) * 18
-  local bar = frame:CreateTexture(nil, "ARTWORK")
-  bar:SetPoint("TOPLEFT", RX + 170, y - 2)
-  bar:SetHeight(12)
-  driverRows[i] = { name = Text(y, nil, RX, 165), bar = bar, val = Text(y, nil, RX + 175, 240) }
-end
-vDrivers:ClearAllPoints()
-vDrivers:SetPoint("TOPLEFT", RX, DRIVER_Y + 18)
-local vMore = Text(DRIVER_Y - 8 * 18, "GameFontDisableSmall", nil, VW)
-
-RefreshView = function()
-  if not selected then return end
-  local e = Evaluated(selected)
-  local r = e.rule
-  local v, col, why = ns.Verdict(e)
-  vVerdict:SetText(col .. v .. "|r")
-  vName:SetText(r.name)
-  vWhy:SetText(table.concat(why, "; "))
-
-  -- 1. profit: red below zero, green above; yellow band = the week's low..high; markers safe / basis
-  local vals = { 0 }
-  for _, x in ipairs({ e.worst or false, e.best or false, e.safe or false, e.profit or false }) do if x then vals[#vals + 1] = x end end
-  local lo, hi = math.min(unpack(vals)), math.max(unpack(vals))
-  profitAxis:Scale(lo, hi)
-  profitAxis:Span(1, lo - (hi - lo), 0, 0.6, 0.1, 0.1, 0.5)
-  profitAxis:Span(2, 0, hi + (hi - lo), 0.1, 0.5, 0.1, 0.5)
-  profitAxis:Span(3, e.worst, e.best, 1, 0.82, 0, 0.6)
-  profitAxis:Mark(1, 0, "0", 1, 1, 1, false)
-  profitAxis:Mark(2, e.safe, "safe " .. Money(e.safe), 0.3, 0.9, 1, true)
-  profitAxis:Mark(3, e.profit, Basis() .. " " .. Money(e.profit), 1, 1, 1, false)
-  vProfitNote:SetText(("|cffffd100Yellow|r = profit over the last 7 days, from the week's lowest to highest price: %s to %s"):format(Money(e.worst), Money(e.best)))
-
-  -- 2. cost: green up to what the outputs are worth at safe prices, red beyond; marker = cost now
-  local cap = math.max(e.cost or 0, e.safeValue or 0)
-  costAxis:Scale(0, cap > 0 and cap or 1)
-  costAxis:Span(1, 0, e.safeValue, 0.1, 0.5, 0.1, 0.6)
-  costAxis:Span(2, e.safeValue, cap * 2, 0.6, 0.1, 0.1, 0.6)
-  costAxis:Mark(1, e.safeValue, "break-even " .. Money(e.safeValue), 0.3, 0.9, 1, true)
-  costAxis:Mark(2, e.cost, "now " .. Money(e.cost), 1, 1, 1, false)
-  if e.cost and e.safeValue and e.safeValue > 0 then
-    local pct = 100 * (1 - e.cost / e.safeValue)
-    local each = e.maxBuy and ("  -  buy " .. Name(next(r.inputs)) .. " below " .. Money(e.maxBuy) .. " each") or ""
-    vCostNote:SetText(("You pay %s now; break-even (the most you can pay at cautious prices) is %s: "):format(Money(e.cost), Money(e.safeValue))
-      .. (pct >= 0 and "|cff40ff40%.0f%% to spare|r" or "|cffff4040%.0f%% too much|r"):format(math.abs(pct)) .. each)
-  else
-    vCostNote:SetText("|cff999999no price for an input|r")
-  end
-
-  -- 3. checks
-  local checks = ns.Checks(e)
-  for i, row in ipairs(checkRows) do
-    local c = checks[i]
-    if c then
-      row.icon:SetTexture(c[1] and "Interface\\RaidFrame\\ReadyCheck-Ready" or "Interface\\RaidFrame\\ReadyCheck-NotReady")
-      row.fs:SetText(c[2])
-      row.icon:Show(); row.fs:Show()
-    else
-      row.icon:Hide(); row.fs:Hide()
-    end
-  end
-
-  -- 4. what the value is made of: odds x price per output
-  local price, er, w = PriceFor(r), e.evalRule, e.weights
-  local items, total, sum = {}, 0, 0
-  for _, id in ipairs(er.pool or {}) do total = total + (w and (w[id] or 0) or 1) end
-  for _, id in ipairs(er.pool or {}) do
-    local odds = (w and (w[id] or 0) or 1) / total
-    items[#items + 1] = { id = id, odds = odds, v = odds * (price(id, false) or 0) * (er.poolQty or 1) }
-  end
-  for id, n in pairs(er.outputs or {}) do items[#items + 1] = { id = id, odds = 1, v = n * (price(id, false) or 0) } end
-  table.sort(items, function(a, b) return a.v > b.v end)
-  for _, it in ipairs(items) do sum = sum + it.v end
-  vDrivers:SetText(("What the value is made of (%s per run at %s, before cut)"):format(Money(sum), Basis()))
-  local top = items[1] and items[1].v or 0
-  for i, row in ipairs(driverRows) do
-    local it = items[i]
-    if it then
-      row.name:SetText(("%s |cff999999%.1f%%|r"):format((Name(it.id):gsub("^Craftsman's Writ: ", "")), 100 * it.odds))
-      local bw = top > 0 and math.max(1, it.v / top * 150) or 1
-      row.bar:SetWidth(bw)
-      row.bar:SetColorTexture(1, 0.82, 0, 0.8)
-      row.val:ClearAllPoints()
-      row.val:SetPoint("TOPLEFT", frame, "TOPLEFT", RX + 175 + bw, DRIVER_Y - (i - 1) * 18)
-      row.val:SetText(("%s  |cff999999%.0f%%|r"):format(Money(it.v), sum > 0 and 100 * it.v / sum or 0))
-      row.name:Show(); row.bar:Show(); row.val:Show()
-    else
-      row.name:Hide(); row.bar:Hide(); row.val:Hide()
-    end
-  end
-  local rest = 0
-  for i = 9, #items do rest = rest + items[i].v end
-  vMore:SetText(#items > 8 and ("... %d more outputs: %s (%.0f%%)"):format(#items - 8, Money(rest), sum > 0 and 100 * rest / sum or 0) or "")
-end
-end
-
 ---------------------------------------------------------------- stock & demand: would buying all sealed flood the market?
 
-local RefreshStock, stockBtn -- the rest stays inside the block: Lua allows 200 locals per file scope
 do
 
 local STOCK_OK, STOCK_MAX = 7, 30 -- days of supply: fine up to a week; the bars end at a month
@@ -2425,57 +1670,6 @@ local function Listed(id)
   return r and r.quantity or 0, r and r.quantity and "scan" or nil
 end
 
-local SROWS, SBW = 30, 200
-local stock = CreateFrame("Frame", "FlipRulesStock", frame, "BasicFrameTemplateWithInset")
-stock:SetSize(600, 120 + SROWS * 15)
-stock:SetPoint("TOPLEFT", frame, "TOPRIGHT", 4, 0)
-stock:EnableMouse(true)
-stock:Hide()
-stock.TitleText:SetText("Stock & demand")
-local sOffset = 0
-
-local function SText(parent, x, y, w, font)
-  local fs = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
-  fs:SetPoint("TOPLEFT", x, y)
-  if w then fs:SetWidth(w); fs:SetWordWrap(false) end
-  fs:SetJustifyH("LEFT")
-  return fs
-end
-
-local sHead = SText(stock, 14, -32, 570, "GameFontNormal")
-local sSum = SText(stock, 14, -52, 570)
-sSum:SetWordWrap(true)
-local sealLabel = SText(stock, 14, -90, nil)
-sealLabel:SetText("Sealed to buy (empty = all listed):")
-local sealBox = CreateFrame("EditBox", nil, stock, "InputBoxTemplate")
-sealBox:SetSize(50, 18)
-sealBox:SetPoint("LEFT", sealLabel, "RIGHT", 8, 0)
-sealBox:SetAutoFocus(false)
-sealBox:SetNumeric(true)
-sealBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-sealBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-local sLegend = SText(stock, 300, -90, 290, "GameFontDisableSmall")
-sLegend:SetText(("|cff999999grey|r listed now, |cffffd100yellow|r yours, line = %d days"):format(STOCK_OK))
-
-local SY = -112
-local okLine = stock:CreateTexture(nil, "OVERLAY")
-okLine:SetColorTexture(0.3, 1, 0.3, 0.7)
-okLine:SetPoint("TOPLEFT", 190 + SBW * STOCK_OK / STOCK_MAX, SY + 2)
-okLine:SetSize(1, SROWS * 15)
-local sRows = {}
-for i = 1, SROWS do
-  local y = SY - (i - 1) * 15
-  local r = { name = SText(stock, 14, y, 172) }
-  r.base = stock:CreateTexture(nil, "ARTWORK"); r.base:SetPoint("TOPLEFT", 190, y - 1); r.base:SetHeight(11)
-  r.mine = stock:CreateTexture(nil, "ARTWORK"); r.mine:SetPoint("LEFT", r.base, "RIGHT", 0, 0); r.mine:SetHeight(11)
-  r.base:SetColorTexture(0.6, 0.6, 0.6, 0.8)
-  r.mine:SetColorTexture(1, 0.82, 0, 0.9)
-  r.val = SText(stock, 196 + SBW, y, 390 - SBW)
-  sRows[i] = r
-end
-
-local function Days(d) return d == math.huge and "never" or d >= STOCK_MAX and ("%d+d"):format(STOCK_MAX) or ("%.1fd"):format(d) end
-
 -- Movers: every item FlipRules knows, ranked by how much moves through the AH. cover = hours until
 -- what's listed now sells out at the current pace; under SHORT_COVER hours on a busy item it is
 -- likely under-supplied. Pure: rows = { { id, perDay, listed, price } }.
@@ -2493,23 +1687,6 @@ function ns.Movers(rows, key)
   return rows
 end
 
-local moverMode, moverKey = false, "gold"
-local mRows = {}
-for i = 1, SROWS do
-  local y = SY - (i - 1) * 15
-  mRows[i] = { SText(stock, 14, y, 210), SText(stock, 230, y, 70), SText(stock, 305, y, 60),
-    SText(stock, 370, y, 60), SText(stock, 435, y, 70), SText(stock, 510, y, 80) }
-  for _, fs in ipairs(mRows[i]) do fs:Hide() end
-end
-for c = 2, 6 do for i = 1, SROWS do mRows[i][c]:SetJustifyH("RIGHT") end end
-local mHead = { SText(stock, 14, SY + 16, 210, "GameFontNormalSmall"), SText(stock, 230, SY + 16, 70, "GameFontNormalSmall"),
-  SText(stock, 305, SY + 16, 60, "GameFontNormalSmall"), SText(stock, 370, SY + 16, 60, "GameFontNormalSmall"),
-  SText(stock, 435, SY + 16, 70, "GameFontNormalSmall"), SText(stock, 510, SY + 16, 80, "GameFontNormalSmall") }
-for i, t in ipairs({ "Item", "Sold/day", "Listed", "Cover", "Price", "Gold/day" }) do
-  mHead[i]:SetText(t); if i > 1 then mHead[i]:SetJustifyH("RIGHT") end; mHead[i]:Hide()
-end
-
-local sortBtns = {}
 local function MoverItems(key)
   local ids, seen = {}, {}
   local function add(id) if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end end
@@ -2523,54 +1700,9 @@ local function MoverItems(key)
       rows[#rows + 1] = { id = id, perDay = pd, listed = (Listed(id)), price = a and (a.median or a.minBuyout) or 0 }
     end
   end
-  return ns.Movers(rows, key or moverKey)
+  return ns.Movers(rows, key or "gold")
 end
 ns.MoverRows = MoverItems
-
-local function Count(n) return n >= 10000 and ("%.0fk"):format(n / 1000) or n >= 100 and ("%.0f"):format(n) or ("%.1f"):format(n) end
-local function Cover(h) return h == math.huge and "-" or h >= 48 and ("%.0fd"):format(h / 24) or ("%.0fh"):format(h) end
-
-local function RefreshMovers()
-  sealLabel:Hide(); sealBox:Hide(); sLegend:Hide(); okLine:Hide()
-  for _, x in ipairs(sRows) do x.name:Hide(); x.base:Hide(); x.mine:Hide(); x.val:Hide() end
-  for _, h in ipairs(mHead) do h:Show() end
-  for _, b in pairs(sortBtns) do b:Show() end
-  for k, b in pairs(sortBtns) do if k == moverKey then b:LockHighlight() else b:UnlockHighlight() end end
-  local rows = MoverItems()
-  local short = 0
-  for _, r in ipairs(rows) do if r.short then short = short + 1 end end
-  sHead:SetText(("Movers  -  %d items, |cffff6060%d likely under-supplied|r"):format(#rows, short))
-  sSum:SetText(("Gold/day = sold a day x price: where the money moves. Cover = hours until what's listed sells out. "
-    .. "|cffff6060Red|r: under %dh of cover while selling %d+ a day. Sold/day is AHledger's estimate from players' scans "
-    .. "(it leans low); listed is your live check if under an hour old."):format(SHORT_COVER, BUSY))
-  sOffset = math.max(0, math.min(sOffset, #rows - SROWS))
-  for i, x in ipairs(mRows) do
-    local it = rows[i + sOffset]
-    for _, fs in ipairs(x) do fs:SetShown(it and true or false) end
-    if it then
-      local c = it.short and "|cffff6060" or "|cffffffff"
-      x[1]:SetText(c .. (Name(it.id):gsub("^Craftsman's Writ: ", "Writ: ")) .. "|r")
-      x[2]:SetText(Count(it.perDay)); x[3]:SetText(Count(it.listed)); x[4]:SetText(c .. Cover(it.cover) .. "|r")
-      x[5]:SetText(Money(it.price)); x[6]:SetText(Money(math.floor(it.gold)))
-    end
-  end
-end
-
-for i, k in ipairs({ { "gold", "Gold/day" }, { "sold", "Sold/day" }, { "cover", "Cover" } }) do
-  local b = CreateFrame("Button", nil, stock, "UIPanelButtonTemplate")
-  b:SetSize(70, 18)
-  b:SetPoint("TOPLEFT", 380 + (i - 1) * 72, -30)
-  b:SetText(k[2])
-  b:SetScript("OnClick", function() moverKey = k[1]; sOffset = 0; RefreshStock() end)
-  b:Hide()
-  sortBtns[k[1]] = b
-end
-
-local modeBtn = CreateFrame("Button", nil, stock, "UIPanelButtonTemplate")
-modeBtn:SetSize(80, 18)
-modeBtn:SetPoint("TOPRIGHT", -30, -4)
-modeBtn:SetScript("OnClick", function() moverMode = not moverMode; sOffset = 0; RefreshStock() end)
-
 -- Stock & demand of a writ flip's pool if you open `sealed` more (nil: every sealed one listed): ns.Supply's
 -- table plus listedSealed, sealedSrc ("live" / "scan" / nil) and unknown (writs with no listing data).
 function ns.SupplyFor(r, sealed)
@@ -2589,82 +1721,6 @@ function ns.SupplyFor(r, sealed)
   t.listedSealed, t.sealedSrc, t.unknown, t.okDays = listedSealed, sealedSrc, unknown, STOCK_OK
   return t
 end
-
-RefreshStock = function()
-  if not stock:IsShown() then return end
-  modeBtn:SetText(moverMode and "Writs" or "Movers")
-  sHead:SetWidth(moverMode and 360 or 570)
-  if moverMode then return RefreshMovers() end
-  for _, h in ipairs(mHead) do h:Hide() end
-  for _, b in pairs(sortBtns) do b:Hide() end
-  for _, x in ipairs(mRows) do for _, fs in ipairs(x) do fs:Hide() end end
-  sealLabel:Show(); sealBox:Show(); sLegend:Show(); okLine:Show()
-  local r = selected
-  if not (r and r.pool and r.use) then sHead:SetText("Select a sealed writ rule.") sSum:SetText("") for _, x in ipairs(sRows) do x.name:Hide(); x.base:Hide(); x.mine:Hide(); x.val:Hide() end return end
-  local e = Evaluated(r)
-  local pool, w = e.evalRule.pool, e.weights
-  local total = 0
-  for _, id in ipairs(pool) do total = total + (w and (w[id] or 0) or 1) end
-  local rows, unknown = {}, 0
-  for _, id in ipairs(pool) do
-    local n, src = Listed(id)
-    if not src then unknown = unknown + 1 end
-    rows[#rows + 1] = { id = id, odds = (w and (w[id] or 0) or 1) / total, stock = n, perDay = PerDay(id) }
-  end
-  local listedSealed, sealedSrc = Listed(r.use)
-  local sealed = tonumber(sealBox:GetText()) or listedSealed
-  local t = ns.Supply(rows, sealed)
-  local col = t.fastShare >= 0.7 and "|cff40ff40" or t.fastShare >= 0.4 and "|cffffd100" or "|cffff4040"
-  local word = t.fastShare >= 0.7 and "Balanced" or t.fastShare >= 0.4 and "Tight" or "Oversupplied"
-  sHead:SetText(("%s%s|r  -  %d sealed listed (%s), buying %d"):format(col, word, listedSealed, sealedSrc or "no data", sealed))
-  sSum:SetText(("Opened writs listed: %d, selling ~%.1f a day in total: %s of supply now, %s after you add %d.\n"
-    .. "%s%.0f%%|r of the writs you'd open land where everything listed clears within %d days.%s"):format(
-    t.stock, t.perDay, Days(t.now), Days(t.after), sealed, col, 100 * t.fastShare, STOCK_OK,
-    unknown > 0 and (" |cff999999%d writs have no listing data: run Check prices.|r"):format(unknown) or ""))
-  sOffset = math.max(0, math.min(sOffset, #rows - SROWS))
-  local px = SBW / STOCK_MAX
-  for i, x in ipairs(sRows) do
-    local it = rows[i + sOffset]
-    if it then
-      local base = math.min(it.now, STOCK_MAX)
-      local mine = math.min(it.after, STOCK_MAX) - base
-      x.name:SetText(("%s |cff999999%.1f%%|r"):format((Name(it.id):gsub("^Craftsman's Writ: ", "")), 100 * it.odds))
-      x.base:SetWidth(math.max(1, base * px))
-      x.mine:SetWidth(math.max(1, mine * px))
-      x.mine:SetShown(mine > 0)
-      x.val:SetText(("%s  |cff999999%d listed +%.1f, %.1f/day|r"):format(
-        (it.after <= STOCK_OK and "|cff40ff40" or "|cffff6060") .. Days(it.now) .. " > " .. Days(it.after) .. "|r",
-        it.stock, it.add, it.perDay or 0))
-      x.name:Show(); x.base:Show(); x.val:Show()
-    else
-      x.name:Hide(); x.base:Hide(); x.mine:Hide(); x.val:Hide()
-    end
-  end
-end
-
-stock:EnableMouseWheel(true)
-stock:SetScript("OnMouseWheel", function(_, d) sOffset = math.max(0, sOffset - d * 3); RefreshStock() end)
-stock:SetScript("OnShow", RefreshStock)
-sealBox:SetScript("OnTextChanged", function(_, user) if user then RefreshStock() end end)
-
-stockBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-stockBtn:SetSize(120, 22)
-stockBtn:SetPoint("TOPRIGHT", -14, -32)
-stockBtn:SetText("Stock & demand")
-stockBtn:SetScript("OnClick", function()
-  if not (selected and selected.pool and selected.use) then moverMode = true end -- writs view needs a sealed writ rule
-  stock:SetShown(not stock:IsShown())
-end)
-stockBtn:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Stock & demand")
-  GameTooltip:AddLine("Writs: would buying up the sealed writs flood the market? For each writ: days until what's listed "
-    .. "sells at today's pace, now and after your opened writs are added by their drop odds.", 1, 1, 1, true)
-  GameTooltip:AddLine("Movers: every item FlipRules knows, ranked by gold moved a day, units sold a day, or hours "
-    .. "until the listings run out. Red = busy and nearly sold out.", 1, 1, 1, true)
-  GameTooltip:Show()
-end)
-stockBtn:SetScript("OnLeave", GameTooltip_Hide)
 end
 
 ---------------------------------------------------------------- price history: what you sell vs what it takes, per scan
@@ -2702,76 +1758,6 @@ function ns.PriceOn(hist, day, vendor, recipes)
   end
 end
 
-do
-local HW, HH, HROWS = 560, 200, 10
-local hist = CreateFrame("Frame", "FlipRulesHistory", frame, "BasicFrameTemplateWithInset")
-hist:SetSize(600, 120 + HH + HROWS * 15 + 30)
-hist:SetPoint("TOPLEFT", frame, "TOPRIGHT", 4, 0)
-hist:EnableMouse(true)
-hist:Hide()
-hist.TitleText:SetText("Price history")
-
-local function HText(x, y, w, font, parent)
-  local fs = (parent or hist):CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
-  fs:SetPoint("TOPLEFT", x, y)
-  if w then fs:SetWidth(w); fs:SetWordWrap(false) end
-  fs:SetJustifyH("LEFT")
-  return fs
-end
-local hHead = HText(14, -32, 570, "GameFontNormal")
-local hNote = HText(14, -50, 570, "GameFontDisableSmall")
-local hLegend = HText(14, -66, 570)
-hLegend:SetText("|cff40ff40--|r sells for (after AH cut)   |cffff6060--|r costs to make   |cff999999one dot per scan or live check|r")
-
-local plot = CreateFrame("Frame", nil, hist)
-plot:SetPoint("TOPLEFT", 20, -86)
-plot:SetSize(HW, HH)
-local bg = plot:CreateTexture(nil, "BACKGROUND")
-bg:SetAllPoints()
-bg:SetColorTexture(0.08, 0.08, 0.08, 1)
-local yTop, yMid = HText(2, -2, 120, nil, plot), HText(2, -HH / 2, 120, nil, plot)
-local xFirst, xLast = HText(0, -HH - 4, 90), HText(0, -HH - 4, 90)
-xFirst:ClearAllPoints(); xFirst:SetPoint("TOPLEFT", plot, "BOTTOMLEFT", 0, -2)
-xLast:ClearAllPoints(); xLast:SetPoint("TOPRIGHT", plot, "BOTTOMRIGHT", 0, -2); xLast:SetJustifyH("RIGHT")
-local lines, dots, ticks = {}, {}, {}
--- a faint line and a date where a new day starts
-local function Tick(i, x, label)
-  local t = ticks[i] or { tex = plot:CreateTexture(nil, "BORDER"), fs = plot:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall") }
-  ticks[i] = t
-  t.tex:SetColorTexture(1, 1, 1, 0.12)
-  t.tex:ClearAllPoints(); t.tex:SetPoint("BOTTOMLEFT", plot, "BOTTOMLEFT", x, 0); t.tex:SetSize(1, HH)
-  t.fs:ClearAllPoints(); t.fs:SetPoint("TOP", plot, "BOTTOMLEFT", x, -2); t.fs:SetText(label)
-  t.tex:Show(); t.fs:Show()
-end
-local function Line(i, x1, y1, x2, y2, r, g, b)
-  local l = lines[i] or plot:CreateLine(nil, "ARTWORK")
-  lines[i] = l
-  l:SetThickness(2)
-  l:SetColorTexture(r, g, b, 1)
-  l:SetStartPoint("BOTTOMLEFT", plot, x1, y1)
-  l:SetEndPoint("BOTTOMLEFT", plot, x2, y2)
-  l:Show()
-end
-local function Dot(i, x, y, r, g, b)
-  local d = dots[i] or plot:CreateTexture(nil, "OVERLAY")
-  dots[i] = d
-  d:SetColorTexture(r, g, b, 1)
-  d:SetSize(5, 5)
-  d:ClearAllPoints()
-  d:SetPoint("CENTER", plot, "BOTTOMLEFT", x, y)
-  d:Show()
-end
-
-local TY = -86 - HH - 22
-local th = HText(14, TY, 570, "GameFontNormalSmall")
-th:SetText("Item                                                    first point      now        change")
-local tRows = {}
-for i = 1, HROWS do
-  local y = TY - i * 15
-  tRows[i] = { name = HText(14, y, 300), a = HText(320, y, 90), b = HText(415, y, 90), c = HText(510, y, 70) }
-end
-
-
 -- A flip's history as data: one point per hour any of its items was seen (cost to make, value after
 -- the cut), first..today slots, and each input and output's price then and now.
 function ns.HistData(r)
@@ -2803,109 +1789,6 @@ function ns.HistData(r)
   rows[#rows + 1] = { label = "Sells for (after cut)", a = pts[1].value, b = pts[#pts].value }
   return { pts = pts, first = first, today = now, hi = hi, rows = rows }
 end
-
-ns.RefreshHist = function()
-  if not hist:IsShown() then return end
-  for _, l in pairs(lines) do l:Hide() end
-  for _, d in pairs(dots) do d:Hide() end
-  local r = selected
-  if not (r and (r.inputs or r.pool)) then hHead:SetText("Select a rule.") return end
-  local e = Evaluated(r)
-  local er, H = e.evalRule, FlipRulesDB.hist or {}
-  -- one point at every hour any item involved has data (inputs, station, chains, outputs or pool)
-  local now, seen, slots = ns.Slot(time()), {}, {}
-  for _, id in ipairs(RuleItems(r)) do
-    for k in pairs(H[id] or {}) do if not seen[k] then seen[k] = true; slots[#slots + 1] = k end end
-  end
-  if not seen[now] then slots[#slots + 1] = now end
-  table.sort(slots)
-  local first, today = slots[1], now
-  local pts, hi, nPriced = {}, 0, #(er.pool or {})
-  for _ in pairs(er.outputs or {}) do nPriced = nPriced + 1 end
-  for _, k in ipairs(slots) do
-    local cost, value, _, unpriced = ns.Evaluate(er, ns.PriceOn(H, k, VendorPrice, ns.recipes), e.weights)
-    local ok = nPriced > 0 and unpriced / nPriced <= 0.25
-    local p = { slot = k, cost = cost, value = ok and value or nil }
-    pts[#pts + 1] = p
-    hi = math.max(hi, p.cost or 0, p.value or 0)
-  end
-  hHead:SetText(r.name)
-  hNote:SetText(#pts < 2 and "History builds up from your live checks and AHledger's scans and price table: one point each."
-    or ("%d points over %.1f days, from your live checks and AHledger's scans; a gap = too little seen then"):format(
-      #pts, (today - first) / 24))
-  if hi <= 0 then hi = 1 end
-  yTop:SetText(Money(hi)); yMid:SetText(Money(hi / 2))
-  xFirst:SetText(date("%m-%d %H:%M", first * 3600)); xLast:SetText(date("%m-%d %H:%M", today * 3600))
-  local span = math.max(1, today - first)
-  local function X(i) return #pts > 1 and (pts[i].slot - first) / span * HW or HW / 2 end
-  local function Y(v) return v / hi * (HH - 14) end
-  for _, t in pairs(ticks) do t.tex:Hide(); t.fs:Hide() end
-  local ti, lastDay = 0, date("%m-%d", first * 3600)
-  for k = first + 1, today do -- shortcut: walks every hour of the range, at most 720
-    local d = date("%m-%d", k * 3600)
-    if d ~= lastDay then
-      lastDay = d
-      local x = (k - first) / span * HW
-      if x > 40 and x < HW - 40 then ti = ti + 1; Tick(ti, x, d) end -- keep clear of the end labels
-    end
-  end
-  local li, di = 0, 0
-  for key, c in pairs({ value = { 0.25, 1, 0.25 }, cost = { 1, 0.38, 0.38 } }) do
-    for i, p in ipairs(pts) do
-      if p[key] then
-        di = di + 1; Dot(di, X(i), Y(p[key]), unpack(c))
-        local q = pts[i + 1]
-        if q and q[key] then li = li + 1; Line(li, X(i), Y(p[key]), X(i + 1), Y(q[key]), unpack(c)) end
-      end
-    end
-  end
-
-  -- each direct input (and the station) and what you sell: first point vs now
-  local rows = {}
-  local priceFirst, priceNow = ns.PriceOn(H, first, VendorPrice, ns.recipes), ns.PriceOn(H, today, VendorPrice, ns.recipes)
-  for id, n in pairs(er.inputs or {}) do rows[#rows + 1] = { id = id, a = priceFirst(id, true), b = priceNow(id, true), tag = "mat" } end
-  for id in pairs(er.outputs or {}) do rows[#rows + 1] = { id = id, a = priceFirst(id, false), b = priceNow(id, false), tag = "sell" } end
-  local pf, pn = pts[1], pts[#pts]
-  local function PerDayFmt(v) return v and ("%.1f/day"):format(v) or "|cff999999?|r" end
-  for id in pairs(er.outputs or {}) do
-    rows[#rows + 1] = { label = "Sold per day (AHledger)", a = ns.HistField(H, id, first, "pd"), b = ns.HistField(H, id, today, "pd"), fmt = PerDayFmt }
-  end
-  rows[#rows + 1] = { label = "Total cost to make", a = pf.cost, b = pn.cost }
-  rows[#rows + 1] = { label = "Sells for (after cut)", a = pf.value, b = pn.value }
-  for i, x in ipairs(tRows) do
-    local it = rows[i]
-    if it then
-      local name = it.label and ("|cffffffff" .. it.label .. "|r")
-        or ((it.tag == "sell" and "|cff40ff40sell|r " or "") .. Link(it.id) .. (ns.vendor[it.id] and " |cff80c0ff(vendor)|r" or ""))
-      x.name:SetText(name)
-      x.a:SetText((it.fmt or Money)(it.a)); x.b:SetText((it.fmt or Money)(it.b))
-      local ch = it.a and it.b and it.a > 0 and (it.b / it.a - 1) * 100
-      x.c:SetText(ch and ((ch > 0.5 and "|cffff9040+" or ch < -0.5 and "|cff40c0ff" or "|cff999999") .. ("%.0f%%|r"):format(ch)) or "")
-      for _, f in pairs(x) do f:Show() end
-    else
-      for _, f in pairs(x) do f:Hide() end
-    end
-  end
-end
-
-hist:SetScript("OnShow", function() if FlipRulesStock then FlipRulesStock:Hide() end ns.RefreshHist() end)
-if FlipRulesStock then FlipRulesStock:HookScript("OnShow", function() hist:Hide() end) end
-
-ns.histBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-ns.histBtn:SetSize(110, 22)
-ns.histBtn:SetPoint("TOPRIGHT", -140, -32)
-ns.histBtn:SetText("Price history")
-ns.histBtn:SetScript("OnClick", function() hist:SetShown(not hist:IsShown()) end)
-ns.histBtn:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Price history")
-  GameTooltip:AddLine("What the result sells for against what making it costs, by day, from your live checks and AHledger's scans. "
-    .. "Below: each reagent's price on the first recorded day and now.", 1, 1, 1, true)
-  GameTooltip:Show()
-end)
-ns.histBtn:SetScript("OnLeave", GameTooltip_Hide)
-end
-
 ---------------------------------------------------------------- footer: settings
 
 local BASIS_HELP = {
@@ -2914,168 +1797,14 @@ local BASIS_HELP = {
   safe = { "Safe", "The lower of today's and the 7-day median (cautious). The verdict always uses this." },
 }
 ns.BASIS_HELP, ns.Basis = BASIS_HELP, Basis
-
-local sellLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sellLabel:SetPoint("BOTTOMLEFT", LX, 16)
-sellLabel:SetText("Value outputs at:")
-
-local basisBtns, prev = {}, sellLabel
-for _, key in ipairs({ "now", "7d", "safe" }) do
-  local b = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  b:SetSize(66, 22)
-  b:SetPoint("LEFT", prev, "RIGHT", prev == sellLabel and 8 or 2, 0)
-  b:SetText(BASIS_HELP[key][1])
-  b:SetScript("OnClick", function() FlipRulesDB.basis = key; RefreshAll() end)
-  b:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:AddLine(BASIS_HELP[key][1])
-    GameTooltip:AddLine(BASIS_HELP[key][2], 1, 1, 1, true)
-    GameTooltip:AddLine("Buying: vendor items at the vendor price, the rest at the cheapest listing, or crafting it when that is cheaper.", 0.6, 0.6, 0.6, true)
-    GameTooltip:Show()
-  end)
-  b:SetScript("OnLeave", GameTooltip_Hide)
-  basisBtns[key] = b
-  prev = b
-end
-
-local checkBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-checkBtn:SetSize(110, 22)
-checkBtn:SetPoint("LEFT", prev, "RIGHT", 10, 0)
-checkBtn:SetText("Check prices")
-checkBtn:SetScript("OnClick", function()
-  local ids = {}
-  if FlipRulesDB.filter == "writs" then -- every sealed writ first, selected or not
-    for _, r in ipairs(ns.rules) do if r.use and Shown(r) then ids[#ids + 1] = r.use end end
-  end
-  for _, id in ipairs(selected and RuleItems(selected) or {}) do ids[#ids + 1] = id end
-  Check(ids) -- drops duplicates
-end)
-checkBtn:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Check prices live")
-  GameTooltip:AddLine("Searches the auction house for every item of the selected rule, one after another. "
-    .. "For an hour the lowest listings found replace AHledger's, on all your characters.", 1, 1, 1, true)
-  if FlipRulesDB.filter == "writs" then GameTooltip:AddLine("Writs tab: all three sealed writs are checked too.", 0.4, 1, 0.4, true) end
-  GameTooltip:AddLine("Searches you do yourself in the auction house are recorded too.", 0.7, 0.7, 0.7, true)
-  if #searchQueue > 0 or searching then GameTooltip:AddLine(("%d searches left"):format(#searchQueue + (searching and 1 or 0)), 1, 0.8, 0) end
-  GameTooltip:Show()
-end)
-checkBtn:SetScript("OnLeave", GameTooltip_Hide)
-
--- Leatherworking tab: every item of every leatherworking rule (reagents down the chains, stations, products)
-local checkAllBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-checkAllBtn:SetSize(90, 22)
-checkAllBtn:SetPoint("LEFT", checkBtn, "RIGHT", 4, 0)
-checkAllBtn:SetText("Check all LW")
-checkAllBtn:SetScript("OnClick", function()
-  local ids = {}
-  for _, r in ipairs(ns.rules) do
-    if r.group == "Leatherworking" then for _, id in ipairs(RuleItems(r)) do ids[#ids + 1] = id end end
-  end
-  ns.CheckAll(ids)
-end)
-checkAllBtn:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Check every leatherworking flip")
-  GameTooltip:AddLine("Prices every item of every leatherworking rule: products, reagents down the chains, "
-    .. "stations. A full scan of the auction house when one is allowed (every 15 minutes), otherwise a few "
-    .. "queries by item class. Check prices does only the selected rule.", 1, 1, 1, true)
-  GameTooltip:AddLine(ns.ScanStatus(), 0.7, 0.7, 0.7, true)
-  GameTooltip:Show()
-end)
-checkAllBtn:SetScript("OnLeave", GameTooltip_Hide)
-
-local mailLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-mailLabel:SetPoint("BOTTOMLEFT", RX + 250, 18)
-mailLabel:SetText("Mail between:")
-local mailBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
-mailBox:SetSize(160, 20)
-mailBox:SetPoint("LEFT", mailLabel, "RIGHT", 10, 0)
-mailBox:SetAutoFocus(false)
-mailBox:SetScript("OnTextChanged", function(self, user) if user then FlipRulesDB.mailChars = self:GetText() end end)
-mailBox:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_TOP")
-  GameTooltip:AddLine("Your mail characters, comma separated")
-  GameTooltip:AddLine("Mail goes to the first one you aren't logged in as: now " .. MailTo() .. ".", 1, 1, 1, true)
-  GameTooltip:Show()
-end)
-mailBox:SetScript("OnLeave", GameTooltip_Hide)
-mailBox:SetScript("OnEnterPressed", function(self) self:ClearFocus(); RefreshAll() end)
-mailBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-local ahCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-ahCheck:SetSize(24, 24)
-ahCheck:SetPoint("BOTTOMLEFT", RX - 4, 12)
-ahCheck:SetScript("OnClick", function(self) FlipRulesDB.withAH = self:GetChecked() and true or false end)
-local ahLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-ahLabel:SetPoint("LEFT", ahCheck, "RIGHT", 2, 0)
-ahLabel:SetText("Open and close with the auction house")
-
 ---------------------------------------------------------------- refresh everything
 
-RefreshAll = function()
-  if ns.RefreshUI then ns.RefreshUI() end -- the new window (UI/)
-  if not frame:IsShown() then return end
-  local list = Results()
-  if not selected and list[1] then selected = list[1].rule end
-  listOffset = math.max(0, math.min(listOffset, #list - N_ROWS))
-  for i, b in ipairs(rows) do
-    local e = list[i + listOffset]
-    b.entry = e
-    if e then
-      local r = e.rule
-      local v, col = ns.Verdict(e)
-      local tag = r.recipe and "|cff999999[craft]|r " or r.group and "|cff999999[LW]|r " or ""
-      b.cols[1]:SetText(col .. v .. "|r " .. tag .. r.name)
-      b.cols[2]:SetText(Money(e.cost))
-      b.cols[3]:SetText(Money(OnLW() and e.profitDay or e.value))
-      b.cols[4]:SetText(Money(e.profit))
-      b.sel:SetShown(selected and r.name == selected.name)
-      b:Show()
-    else
-      b:Hide()
-    end
-  end
-  local shown = #list > N_ROWS and ("Showing %d-%d of %d, scroll for more. "):format(listOffset + 1, listOffset + N_ROWS, #list) or ""
-  local lw = FlipRulesDB.lw
-  status:SetText(shown .. (OnLW() and (lw and ("%d learned recipes of %s, saved %s."):format(#lw.recipes, lw.char,
-    date("%m-%d %H:%M", lw.t)) or "Open your crafter's Leatherworking window once to add the recipes.")
-    or #ns.craft == 0 and "Open a profession window to add its recipes." or (#ns.craft .. " recipes scanned.")))
-  for b, btn in pairs(basisBtns) do if b == Basis() then btn:LockHighlight() else btn:UnlockHighlight() end end
-  for f, btn in pairs(filterBtns) do if f == (FlipRulesDB.filter or "all") then btn:LockHighlight() else btn:UnlockHighlight() end end
-  for v, btn in pairs(viewBtns) do
-    btn:SetShown(OnLW())
-    if v == (LWAll() and "all" or "writ") then btn:LockHighlight() else btn:UnlockHighlight() end
-  end
-  local day = ByDay()
-  colHeads[3]:SetText(OnLW() and ((day and "> " or "") .. "Profit/day") or "Value")
-  colHeads[4]:SetText((OnLW() and not day and "> " or "") .. "Profit")
-  ahCheck:SetChecked(FlipRulesDB.withAH and true or false)
-  checkBtn:SetShown(ahOpen)
-  checkAllBtn:SetShown(ahOpen and FlipRulesDB.filter == "Leatherworking")
-  checkAllBtn:SetText(ns.ScanBusy(true) and "Scanning..." or "Check all LW")
-  if not mailBox:HasFocus() then mailBox:SetText(FlipRulesDB.mailChars or MAIL_CHARS) end
-  local left = #searchQueue + (searching and 1 or 0)
-  checkBtn:SetText(left > 0 and ("Checking (%d)"):format(left) or "Check prices")
-  RefreshStats()
-  RefreshView()
-  RefreshStock()
-  ns.RefreshHist()
-  ns.histBtn:SetShown(selected and true or false)
-  stockBtn:Show()
-end
-frame:SetScript("OnShow", function() RefreshAll() end)
+RefreshAll = function() if ns.RefreshUI then ns.RefreshUI() end end -- the window (UI/)
+
 
 ---------------------------------------------------------------- opening the window
 
 local openedByAH = false
-
--- the window holds a secure button, so it can't be shown or hidden in combat
-local function Toggle(show)
-  if InCombatLockdown() then return print("|cff33ff99FlipRules|r can't open or close in combat") end
-  if show == nil then show = not frame:IsShown() end
-  frame:SetShown(show)
-end
 
 -- minimap button: click to open, drag to move it around the minimap
 local mm = CreateFrame("Button", "FlipRulesMinimapButton", Minimap)
@@ -3084,12 +1813,12 @@ mm:SetFrameStrata("MEDIUM")
 mm:SetFrameLevel(8)
 mm:RegisterForClicks("LeftButtonUp")
 mm:RegisterForDrag("LeftButton")
-mm:SetHighlightTexture("Interface\Minimap\UI-Minimap-ZoomButton-Highlight")
+mm:SetHighlightTexture([[Interface\Minimap\UI-Minimap-ZoomButton-Highlight]])
 local mmIcon = mm:CreateTexture(nil, "BACKGROUND")
 mmIcon:SetSize(20, 20)
 mmIcon:SetPoint("CENTER", 0, 1)
 local mmBorder = mm:CreateTexture(nil, "OVERLAY")
-mmBorder:SetTexture("Interface\Minimap\MiniMap-TrackingBorder")
+mmBorder:SetTexture([[Interface\Minimap\MiniMap-TrackingBorder]])
 mmBorder:SetSize(53, 53)
 mmBorder:SetPoint("TOPLEFT")
 
@@ -3109,7 +1838,7 @@ mm:SetScript("OnDragStart", function(self)
   end)
 end)
 mm:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
-mm:SetScript("OnClick", function() openedByAH = false; Toggle() end)
+mm:SetScript("OnClick", function() openedByAH = false; ns.ToggleUI() end)
 mm:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_LEFT")
   GameTooltip:AddLine("FlipRules")
@@ -3158,11 +1887,6 @@ function ns.RebuildCrafts()
   for i = #ns.rules, 1, -1 do ns.rules[i] = nil end
   for i, r in ipairs(keep) do ns.rules[i] = r end
   for id, rec in pairs(inter) do ns.recipes[id] = rec end
-  if selected and selected.craft then -- keep the same flip selected
-    local name = selected.name
-    selected = nil
-    for _, r in ipairs(flips) do if r.name == name then selected = r end end
-  end
 end
 end
 
@@ -3199,7 +1923,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     ns.PruneHist(FlipRulesDB.hist, time())
     C_Timer.After(10, ns.ImportAHledger) -- after login settles
     FlipRulesDB.seen = nil -- 0.1 format, replaced by stats
-    mmIcon:SetTexture(((C_Item and C_Item.GetItemIconByID) or GetItemIcon)(262890) or "Interface\Icons\INV_Misc_Note_01")
+    mmIcon:SetTexture(((C_Item and C_Item.GetItemIconByID) or GetItemIcon)(262890) or [[Interface\Icons\INV_Misc_Note_01]])
     PlaceMinimapButton()
     TrackOpens() -- baseline bag counts
     ns.RebuildCrafts()
@@ -3212,15 +1936,15 @@ ev:SetScript("OnEvent", function(_, event, arg1)
   end
   if event == "AUCTION_HOUSE_SHOW" then
     ahOpen = true
-    if FlipRulesDB.withAH and not frame:IsShown() then
+    if FlipRulesDB.withAH and not ns.UIShown() then
       openedByAH = true
-      return Toggle(true)
+      ns.ToggleUI(true)
     end
   end
   if event == "AUCTION_HOUSE_CLOSED" then
     ahOpen, posting = false, nil
     StaticPopup_Hide("FLIPRULES_POST_CONFIRM")
-    if openedByAH and frame:IsShown() then Toggle(false) end
+    if openedByAH and ns.UIShown() then ns.ToggleUI(false) end
     openedByAH = false
   end
   if event == "AUCTION_HOUSE_POST_WARNING" then -- next frame: the game shows its box on this same event
@@ -3258,7 +1982,6 @@ end)
 SLASH_FLIPRULES1 = "/flip"
 SlashCmdList.FLIPRULES = function(msg)
   if (msg or ""):lower() == "test" then return SelfTest() end
-  if (msg or ""):lower() == "new" then return ns.ToggleUI() end
   openedByAH = false
-  Toggle()
+  ns.ToggleUI()
 end

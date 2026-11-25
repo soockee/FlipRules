@@ -33,13 +33,15 @@ local function Pane(key)
   else -- not built yet: say where the feature still lives
     local fs = T.Label(p, "normal", "muted", "CENTER")
     fs:SetPoint("CENTER")
-    fs:SetText("Not moved here yet: it's still in the old window (/flip).")
+    fs:SetText("Nothing here yet.")
   end
   UI.panes[key] = p
   return p
 end
 
 function UI.Show(key)
+  -- the Writs tab holds the secure open button: its pane can't be hidden in combat
+  if InCombatLockdown() and key ~= DB().tab then win.tabs:Select(DB().tab); return ns.Say("can't switch tabs in combat.") end
   DB().tab = key
   for k, p in pairs(UI.panes) do p:SetShown(k == key) end
   Pane(key):Show()
@@ -119,7 +121,11 @@ local function Build()
   win:Hide()
 end
 
+function ns.UIShown() return win ~= nil and win:IsShown() end
+
+-- the window holds a secure button, so it can't be shown or hidden in combat
 function ns.ToggleUI(show)
+  if InCombatLockdown() then return ns.Say("can't open or close in combat.") end
   if not win then Build() end
   if show == nil then show = not win:IsShown() end
   win:SetShown(show)

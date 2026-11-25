@@ -13,6 +13,7 @@ UI\Theme.lua
 UI\Widgets.lua
 UI\Window.lua
 UI\Details.lua
+UI\Actions.lua
 UI\Writs.lua
 UI\Leatherworking.lua
 UI\Market.lua
