@@ -1656,7 +1656,9 @@ local function RecordMail(index)
     takenMail[key] = true
     ns.Track(FlipRulesDB.track, kind, id, count or 1, time(), money)
   end
-  if not rule or kind == "expired" or kind == "cancelled" then return RefreshAll() end
+  -- "won" mail is not counted: on this client its invoice gives the item count where the price
+  -- should be (every purchase saved as 1 copper each, 2026-11-25); purchases are taken at the AH below
+  if not rule or kind ~= "sold" then return RefreshAll() end
   takenMail[key] = true
   local paid = kind == "sold" and (money or 0) or (buyout and buyout > 0 and buyout or bid or 0)
   local e = ns.Earn(FlipRulesDB.earn, kind, rule.name, count or 1, paid)
@@ -1666,6 +1668,48 @@ local function RecordMail(index)
 end
 for _, fn in ipairs({ "TakeInboxMoney", "TakeInboxItem", "AutoLootMailItem" }) do
   if _G[fn] then hooksecurefunc(fn, function(index) pcall(RecordMail, index) end) end
+end
+
+-- What you pay for a writ flip's input (the sealed writ), taken when you buy it at the AH: the game
+-- states the total there. Commodities: StartCommoditiesPurchase, then the price, then success.
+do
+local buying -- { id, qty, total } between starting and finishing a commodity purchase
+local function Bought(id, qty, total)
+  local rule
+  for _, r in ipairs(ns.rules) do if r.use and r.inputs and r.inputs[id] then rule = r break end end
+  if not (rule and total and total > 0 and FlipRulesDB) then return end
+  local e = ns.Earn(FlipRulesDB.earn, "won", rule.name, qty, total)
+  Say(("bought %d x %s for %s: %s net so far"):format(qty, Link(id), Money(total), Money(e.revenue - e.spent)))
+  RefreshAll()
+end
+local AH = C_AuctionHouse
+if AH and AH.StartCommoditiesPurchase then
+  hooksecurefunc(AH, "StartCommoditiesPurchase", function(id, qty) buying = { id = id, qty = qty } end)
+end
+if AH and AH.PlaceBid and AH.GetAuctionInfoByID then -- a non-commodity bought out
+  -- shortcut: counted when the buyout is sent, not when it succeeds; a failed buyout counts too (rare)
+  hooksecurefunc(AH, "PlaceBid", function(auctionID, amount)
+    local ok, info = pcall(AH.GetAuctionInfoByID, auctionID)
+    if ok and info and info.itemKey and info.buyoutAmount and amount >= info.buyoutAmount then
+      Bought(info.itemKey.itemID, info.quantity or 1, amount)
+    end
+  end)
+end
+local f = CreateFrame("Frame")
+for _, e in ipairs({ "COMMODITY_PRICE_UPDATED", "COMMODITY_PURCHASE_SUCCEEDED", "COMMODITY_PURCHASE_FAILED" }) do
+  pcall(f.RegisterEvent, f, e)
+end
+f:SetScript("OnEvent", function(_, event, _, total)
+  if not buying then return end
+  if event == "COMMODITY_PRICE_UPDATED" then buying.total = total -- unitPrice, totalPrice
+  elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
+    local b = buying
+    buying = nil
+    Bought(b.id, b.qty, b.total)
+  else
+    buying = nil
+  end
+end)
 end
 
 -- Every post of a rule's item, yours or by hand, with its production cost at that moment (craft rules).
@@ -3086,6 +3130,13 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     FlipRulesDB.stats = FlipRulesDB.stats or {}
     FlipRulesDB.live = FlipRulesDB.live or {}
     FlipRulesDB.earn = FlipRulesDB.earn or {}
+    if not FlipRulesDB.earnV then -- purchases saved before 2026-11-25 hold item counts, not copper: drop them
+      for name, e in pairs(FlipRulesDB.earn) do
+        e.bought, e.spent = 0, 0
+        if e.sold == 0 then FlipRulesDB.earn[name] = nil end -- reagent buys counted under a craft, nothing else
+      end
+      FlipRulesDB.earnV = 2
+    end
     FlipRulesDB.hist = FlipRulesDB.hist or {}
     FlipRulesDB.track = FlipRulesDB.track or {}
     FlipRulesDB.scan = FlipRulesDB.scan or {}
