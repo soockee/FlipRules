@@ -1001,13 +1001,20 @@ local function NextPost(q)
   for _, it in ipairs(q) do if it.price then return it end end
 end
 
+-- An unlocked stack of `id`, else a locked one (locked = true): Auctionator's Selling tab locks the
+-- item it shows (C_Item.LockItem), which would otherwise block posting that item for good.
 local function FindSlot(id)
+  local lb, ls, ln
   for bag = 0, LAST_BAG do
     for slot = 1, (NumSlots(bag) or 0) do
       local info = SlotInfo(bag, slot)
-      if type(info) == "table" and info.itemID == id and not info.isLocked then return bag, slot, info.stackCount or 1 end
+      if type(info) == "table" and info.itemID == id then
+        if not info.isLocked then return bag, slot, info.stackCount or 1 end
+        lb, ls, ln = lb or bag, ls or slot, ln or info.stackCount or 1
+      end
     end
   end
+  if lb then return lb, ls, ln, true end
 end
 
 local function Say(s) print("|cff33ff99FlipRules|r " .. s) end
@@ -1048,10 +1055,14 @@ local function Post(item)
     Check({ item.id })
     return Say(("checking the current price of %s, click again in a moment."):format(Link(item.id)))
   end
-  local bag, slot, stack = FindSlot(item.id)
-  if not bag then return Say(("no unlocked %s in your bags (a locked one is still being posted or moved)."):format(Link(item.id))) end
+  local bag, slot, stack, locked = FindSlot(item.id)
+  if not bag then return Say(("no %s in your bags."):format(Link(item.id))) end
   local p = { id = item.id, price = item.price, loc = ItemLocation:CreateFromBagAndSlot(bag, slot),
     duration = item.lw and POST_DURATION_LW or POST_DURATION }
+  if locked then -- nothing of ours is posting (checked above), so the lock is another addon's display lock
+    if not (C_Item and C_Item.UnlockItem) then return Say(("%s is locked in your bags; clear it from Auctionator's Selling tab."):format(Link(item.id))) end
+    C_Item.UnlockItem(p.loc)
+  end
   if AH.GetItemCommodityStatus and AH.PostCommodity then
     local ok, s = pcall(AH.GetItemCommodityStatus, p.loc)
     p.commodity = ok and s == (Enum and Enum.ItemCommodityStatus and Enum.ItemCommodityStatus.Commodity or 2)
