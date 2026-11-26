@@ -128,8 +128,8 @@ function UI.Actions(parent, kind)
     end
     local st = ns.PostState(ah and r or nil)
     self.post:SetShown(ah)
-    self.post:SetEnabled(st.items > 0 and not st.busy and (st.fresh or not ns.Searching()))
-    self.post:SetLabel(st.items == 0 and "Nothing to post" or st.fresh and ("Post next (%d left)"):format(st.items)
+    self.post:SetEnabled(st.asking or st.items > 0 and not st.busy and (st.fresh or not ns.Searching()))
+    self.post:SetLabel(st.asking and "Confirm post" or st.items == 0 and "Nothing to post" or st.fresh and ("Post next (%d left)"):format(st.items)
       or ns.Searching() and "Checking price..." or "Check price")
     local stacks = mail and #ns.MailSlots(mailKind) or 0
     self.mail:SetShown(mail)

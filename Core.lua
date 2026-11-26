@@ -1063,23 +1063,28 @@ local function Post(item)
   if needs then
     p.asking = true
     StaticPopup_Show("FLIPRULES_POST_CONFIRM", ("%d x %s at %s each"):format(p.qty, Name(p.id), Money(p.price)), nil, p)
+    Say(("the auction house asks to confirm %d x %s at %s: click Yes, or Post again."):format(p.qty, Link(p.id), Money(p.price)))
+    RefreshAll() -- the button turns into "Confirm post"
   else
     WaitPost(p)
   end
 end
 
 -- The game's own confirm box doesn't work for addon posts, so ours replaces it (see POST_WARNING).
+-- Confirms the post the AH asked about: from the box's Yes, or from clicking Post again.
+local function ConfirmPost(p)
+  if posting ~= p or not p.asking then return end
+  p.asking = nil
+  StaticPopup_Hide("FLIPRULES_POST_CONFIRM")
+  local ok, err = CallPost(p, true)
+  if ok then return WaitPost(p) end
+  posting = nil
+  Say("couldn't post: " .. tostring(err))
+end
 StaticPopupDialogs.FLIPRULES_POST_CONFIRM = {
   text = "The auction house asks you to confirm this post:\n%s",
   button1 = YES, button2 = NO,
-  OnAccept = function(_, p)
-    if posting ~= p then return end
-    p.asking = nil
-    local ok, err = CallPost(p, true)
-    if ok then return WaitPost(p) end
-    posting = nil
-    Say("couldn't post: " .. tostring(err))
-  end,
+  OnAccept = function(_, p) ConfirmPost(p) end,
   OnCancel = function(_, p) if posting == p then posting = nil end end,
   timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
@@ -1244,9 +1249,15 @@ function ns.PostState(r)
   local head = NextPost(q)
   local fresh = head and Live(head.id, POST_FRESH) and true or false
   if head and not fresh and GetTime() - (tried[head.id] or -POST_FRESH) >= POST_FRESH then Check({ head.id }) end
-  return { queue = q, items = items, head = head, fresh = fresh, busy = posting ~= nil }
+  return { queue = q, items = items, head = head, fresh = fresh, busy = posting ~= nil and not posting.asking,
+    asking = posting and posting.asking and true or false }
 end
-function ns.PostNext(r) local head = NextPost(ahOpen and r and PostQueue(r) or {}) if head then Post(head) end end
+-- A post waiting for the AH's confirmation is confirmed by the next click instead of blocking it.
+function ns.PostNext(r)
+  if posting and posting.asking then return ConfirmPost(posting) end
+  local head = NextPost(ahOpen and r and PostQueue(r) or {})
+  if head then Post(head) end
+end
 
 ---------------------------------------------------------------- earnings: auction mail you take
 
