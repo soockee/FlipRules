@@ -1049,7 +1049,7 @@ local function Post(item)
     return Say(("checking the current price of %s, click again in a moment."):format(Link(item.id)))
   end
   local bag, slot, stack = FindSlot(item.id)
-  if not bag then return end
+  if not bag then return Say(("no unlocked %s in your bags (a locked one is still being posted or moved)."):format(Link(item.id))) end
   local p = { id = item.id, price = item.price, loc = ItemLocation:CreateFromBagAndSlot(bag, slot),
     duration = item.lw and POST_DURATION_LW or POST_DURATION }
   if AH.GetItemCommodityStatus and AH.PostCommodity then
@@ -1059,6 +1059,8 @@ local function Post(item)
   p.qty = p.commodity and item.n or stack -- commodities go up in one post; other items one stack per post
   local ok, needs = CallPost(p)
   if not ok then return Say("couldn't post: " .. tostring(needs)) end
+  Say(("posting %d x %s at %s (%s, %s)..."):format(p.qty, Link(p.id), Money(p.price), p.commodity and "commodity" or "item",
+    DURATION_NAME[p.duration]))
   posting = p
   if needs then
     p.asking = true
